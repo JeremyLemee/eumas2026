@@ -1,0 +1,165 @@
+[
+    {
+        "id": "fe43b7b5.f59c78",
+        "type": "tab",
+        "label": "Flow 6",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "339d52d.91b05ae",
+        "type": "inject",
+        "z": "fe43b7b5.f59c78",
+        "name": "OnStart",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.1,
+        "x": 200,
+        "y": 240,
+        "wires": [
+            [
+                "ebcd444a.ff1ef8"
+            ]
+        ]
+    },
+    {
+        "id": "d3fed1ba.fa494",
+        "type": "http in",
+        "z": "fe43b7b5.f59c78",
+        "name": "",
+        "url": "/was/rl/status",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 230,
+        "y": 340,
+        "wires": [
+            [
+                "e2120be5.2a2cf8"
+            ]
+        ]
+    },
+    {
+        "id": "77512ebe.fd5e4",
+        "type": "http response",
+        "z": "fe43b7b5.f59c78",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 630,
+        "y": 340,
+        "wires": []
+    },
+    {
+        "id": "e2120be5.2a2cf8",
+        "type": "function",
+        "z": "fe43b7b5.f59c78",
+        "name": "Status",
+        "func": "msg.payload =   {Z1Level:flow.get('Z1Level'), \n                Z2Level:flow.get('Z2Level'),\n                Z1Light:flow.get('Z1Light'),\n                Z2Light:flow.get('Z2Light'),\n                Z1Blinds:flow.get('Z1Blinds'),\n                Z2Blinds:flow.get('Z2Blinds'),\n                Sunshine:flow.get('Sunshine'),\n                TotalEnergyCost:flow.get('TotalEnergyCost'),\n                EnergyCost:flow.get('EnergyCost'),\n                Hour:flow.get('Hour')\n                };\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 430,
+        "y": 340,
+        "wires": [
+            [
+                "77512ebe.fd5e4"
+            ]
+        ]
+    },
+    {
+        "id": "ebcd444a.ff1ef8",
+        "type": "function",
+        "z": "fe43b7b5.f59c78",
+        "name": "Initialization",
+        "func": "flow.set(\"Z1Level\", 0);\nflow.set(\"Z2Level\", 0);\nflow.set(\"Z1Light\", false);\nflow.set(\"Z2Light\", false);\nflow.set(\"Z1Blinds\", false);\nflow.set(\"Z2Blinds\", false);\nflow.set(\"Sunshine\", 0);\nflow.set(\"TotalEnergyCost\", 0);\nflow.set(\"EnergyCost\", 0);\nflow.set(\"Hour\", 0);\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 430,
+        "y": 240,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "647667a8.361758",
+        "type": "http in",
+        "z": "fe43b7b5.f59c78",
+        "name": "",
+        "url": "/was/rl/action",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 230,
+        "y": 400,
+        "wires": [
+            [
+                "6112e5d6.6b7eac"
+            ]
+        ]
+    },
+    {
+        "id": "6112e5d6.6b7eac",
+        "type": "function",
+        "z": "fe43b7b5.f59c78",
+        "name": "Update action",
+        "func": " msg.payload.cost = 0;\n \nif(msg.payload.Z1Light !== undefined){\n    var z1l = flow.get('Z1Light');\n    flow.set('Z1Light', msg.payload.Z1Light);\n    if(z1l === false && msg.payload.Z1Light === true){\n        msg.payload.cost = 100;\n        flow.set('EnergyCost', 100);\n    }\n    \n}\nif(msg.payload.Z2Light !== undefined){\n    var z2l = flow.get('Z2Light');\n    flow.set('Z2Light', msg.payload.Z2Light);\n    if(z2l === false && msg.payload.Z2Light === true){\n        msg.payload.cost = 100;\n        flow.set('EnergyCost', 100);\n    }\n}\nif(msg.payload.Z1Blinds !== undefined){\n    var z1b = flow.get('Z1Blinds');\n    flow.set('Z1Blinds', msg.payload.Z1Blinds);\n    if(z1b === false && msg.payload.Z1Blinds === true){\n        msg.payload.cost = 5;\n        flow.set('EnergyCost', 5);\n    }    \n}\nif(msg.payload.Z2Blinds !== undefined){\n    var z2b = flow.get('Z2Blinds');\n    flow.set('Z2Blinds', msg.payload.Z2Blinds);\n    if(z2b === false && msg.payload.Z2Blinds === true){\n        msg.payload.cost = 5;\n        flow.set('EnergyCost', 5);\n    } \n}\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 460,
+        "y": 400,
+        "wires": [
+            [
+                "4e941d81.299354"
+            ]
+        ]
+    },
+    {
+        "id": "4e941d81.299354",
+        "type": "http response",
+        "z": "fe43b7b5.f59c78",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 630,
+        "y": 400,
+        "wires": []
+    },
+    {
+        "id": "ceebdcfc.673b9",
+        "type": "function",
+        "z": "fe43b7b5.f59c78",
+        "name": "Update environment",
+        "func": "var z1level = 0;\nvar z2level = 0;\nvar energy = flow.get(\"TotalEnergyCost\");\n\nvar sun = flow.get('Sunshine');\nvar hr = flow.get('Hour');\nif(hr >= 24)\n    hr = 0;\nflow.set('Hour', (hr + 0.1));\n\n//Somewhat fixed sunshine\nflow.set(\"Sunshine\", 600 + 50*Math.random());\n//which can be made to change with time of day..say in a sinusoidal function between 6am and 6pm\n/*\nif(hr > 5 && hr < 19){\n    flow.set(\"Sunshine\", 50 * Math.sin(hr * (Math.PI/24)) + Math.random() * 10);\n}else{\n    flow.set(\"Sunshine\", 0);\n}\n*/\n\nz1level += flow.get('Z1Light') ? 300 : 0;\nz1level += flow.get('Z2Light') ? 50 : 0;\nz1level += flow.get('Z1Blinds') ? sun * 0.5 : 0;\nz1level += flow.get('Z2Blinds') ? sun * 0.25 : 0;\n\nz2level += flow.get('Z1Light') ? 50 : 0;\nz2level += flow.get('Z2Light') ? 300 : 0;\nz2level += flow.get('Z1Blinds') ? sun * 0.25 : 0;\nz2level += flow.get('Z2Blinds') ? sun * 0.50 : 0;\n\nenergy += flow.get('Z1Light') ? 1 : 0;\nenergy += flow.get('Z2Light') ? 1 : 0;\n\nflow.set('Z1Level', z1level);\nflow.set('Z2Level', z2level);\nflow.set(\"TotalEnergyCost\", energy);\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "x": 480,
+        "y": 500,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "fabfde02.08c86",
+        "type": "inject",
+        "z": "fe43b7b5.f59c78",
+        "name": "Repeat",
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "repeat": "1",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "1",
+        "x": 220,
+        "y": 500,
+        "wires": [
+            [
+                "ceebdcfc.673b9"
+            ]
+        ]
+    }
+]

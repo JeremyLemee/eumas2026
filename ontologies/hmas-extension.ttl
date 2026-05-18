@@ -1,0 +1,217 @@
+@prefix : <https://purl.org/hmas//> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xml: <http://www.w3.org/XML/1998/namespace> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@base <https://purl.org/hmas//> .
+
+<https://purl.org/hmas/> rdf:type owl:Ontology .
+
+#################################################################
+#    Object Properties
+#################################################################
+
+###  https://purl.org/hmas/hasSituation
+:hasSituation rdf:type owl:ObjectProperty ;
+              rdfs:subPropertyOf owl:topObjectProperty ;
+              rdfs:domain :Agent ;
+              rdfs:range :Situation .
+
+
+###  https://purl.org/hmas//conveys
+:conveys rdf:type owl:ObjectProperty ;
+         rdfs:subPropertyOf owl:topObjectProperty ;
+         rdfs:domain :Information ;
+         rdfs:range :Content .
+
+
+###  https://purl.org/hmas//hasCallbackUrl
+:hasCallbackUrl rdf:type owl:ObjectProperty ;
+                rdfs:subPropertyOf owl:topObjectProperty ;
+                rdfs:domain :RecurrentPolicy .
+
+
+###  https://purl.org/hmas//hasCreatorId
+:hasCreatorId rdf:type owl:ObjectProperty ;
+              rdfs:subPropertyOf owl:topObjectProperty ;
+              rdfs:domain :Annotation ;
+              rdfs:range :Agent .
+
+
+###  https://purl.org/hmas//hasGoal
+:hasGoal rdf:type owl:ObjectProperty ;
+         rdfs:subPropertyOf owl:topObjectProperty ;
+         rdfs:domain :Agent ;
+         rdfs:range :Goal .
+
+
+###  https://purl.org/hmas//hasInteractionPolicy
+:hasInteractionPolicy rdf:type owl:ObjectProperty ;
+                      rdfs:subPropertyOf owl:topObjectProperty ;
+                      rdfs:domain :Agent ;
+                      rdfs:range :InteractionPolicy .
+
+
+###  https://purl.org/hmas//hasMessageUrl
+:hasMessageUrl rdf:type owl:ObjectProperty ;
+               rdfs:subPropertyOf owl:topObjectProperty ;
+               rdfs:domain :MessagePolicy .
+
+
+###  https://purl.org/hmas//hasOperation
+:hasOperation rdf:type owl:ObjectProperty ;
+              rdfs:subPropertyOf owl:topObjectProperty ;
+              rdfs:domain :Procedure ;
+              rdfs:range :Operation .
+
+
+###  https://purl.org/hmas//hasPostcondition
+:hasPostcondition rdf:type owl:ObjectProperty ;
+                  rdfs:subPropertyOf owl:topObjectProperty ;
+                  rdfs:domain :Procedure ;
+                  rdfs:range :Condition .
+
+
+###  https://purl.org/hmas//hasPrecondition
+:hasPrecondition rdf:type owl:ObjectProperty ;
+                 rdfs:subPropertyOf owl:topObjectProperty ;
+                 rdfs:domain :Procedure ;
+                 rdfs:range :Condition .
+
+
+###  https://purl.org/hmas//hasProcedure
+:hasProcedure rdf:type owl:ObjectProperty ;
+              rdfs:subPropertyOf owl:topObjectProperty ;
+              rdfs:domain :Artifact ;
+              rdfs:range :Procedure .
+
+
+###  https://purl.org/hmas//hasReceiver
+:hasReceiver rdf:type owl:ObjectProperty ;
+             rdfs:subPropertyOf owl:topObjectProperty ;
+             rdfs:domain :Message ;
+             rdfs:range :Agent .
+
+
+###  https://purl.org/hmas//hasSender
+:hasSender rdf:type owl:ObjectProperty ;
+           rdfs:subPropertyOf owl:topObjectProperty ;
+           rdfs:domain :Message ;
+           rdfs:range :Agent .
+
+
+###  https://purl.org/hmas//hasState
+:hasState rdf:type owl:ObjectProperty ;
+          rdfs:subPropertyOf owl:topObjectProperty ;
+          rdfs:domain :Artifact ;
+          rdfs:range :State .
+
+
+###  https://purl.org/hmas//recommendsAbility
+:recommendsAbility rdf:type owl:ObjectProperty ;
+                   rdfs:subPropertyOf owl:topObjectProperty ;
+                   rdfs:domain :Information ;
+                   rdfs:range :Ability .
+
+
+###  https://purl.org/hmas//recommendsContext
+:recommendsContext rdf:type owl:ObjectProperty ;
+                   rdfs:subPropertyOf owl:topObjectProperty ;
+                   rdfs:domain :Annotation ;
+                   rdfs:range :Condition .
+
+
+###  https://purl.org/hmas//signifies
+:signifies rdf:type owl:ObjectProperty ;
+           rdfs:subPropertyOf :conveys ;
+           rdfs:domain :Signifier ;
+           rdfs:range :BehaviorExecution .
+
+
+#################################################################
+#    Classes
+#################################################################
+
+###  https://purl.org/hmas/Content
+:Content rdf:type owl:Class .
+
+
+###  https://purl.org/hmas/Situation
+:Situation rdf:type owl:Class .
+
+
+###  https://purl.org/hmas//Ability
+:Ability rdf:type owl:Class .
+
+
+###  https://purl.org/hmas//Agent
+:Agent rdf:type owl:Class .
+
+
+###  https://purl.org/hmas//Annotation
+:Annotation rdf:type owl:Class ;
+            rdfs:subClassOf :Information .
+
+
+###  https://purl.org/hmas//Artifact
+:Artifact rdf:type owl:Class .
+
+
+###  https://purl.org/hmas//BehaviorExecution
+:BehaviorExecution rdf:type owl:Class .
+
+
+###  https://purl.org/hmas//Condition
+:Condition rdf:type owl:Class .
+
+
+###  https://purl.org/hmas//Goal
+:Goal rdf:type owl:Class .
+
+
+###  https://purl.org/hmas//Information
+:Information rdf:type owl:Class .
+
+
+###  https://purl.org/hmas//InteractionPolicy
+:InteractionPolicy rdf:type owl:Class .
+
+
+###  https://purl.org/hmas//Message
+:Message rdf:type owl:Class ;
+         rdfs:subClassOf :Information .
+
+
+###  https://purl.org/hmas//MessagePolicy
+:MessagePolicy rdf:type owl:Class ;
+               rdfs:subClassOf :InteractionPolicy .
+
+
+###  https://purl.org/hmas//Operation
+:Operation rdf:type owl:Class .
+
+
+###  https://purl.org/hmas//Procedure
+:Procedure rdf:type owl:Class .
+
+
+###  https://purl.org/hmas//RecurrentPolicy
+:RecurrentPolicy rdf:type owl:Class ;
+                 rdfs:subClassOf :InteractionPolicy .
+
+
+###  https://purl.org/hmas//Signifier
+:Signifier rdf:type owl:Class ;
+           rdfs:subClassOf :Annotation ,
+                           [ rdf:type owl:Restriction ;
+                             owl:onProperty :signifies ;
+                             owl:minCardinality "1"^^xsd:nonNegativeInteger
+                           ] .
+
+
+###  https://purl.org/hmas//State
+:State rdf:type owl:Class .
+
+
+###  Generated by the OWL API (version 4.5.29.2024-05-13T12:11:03Z) https://github.com/owlcs/owlapi

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Annotation Platform</title>
+</head>
+<body>
+    <form action="/annotations_nl/" method = "post">
+        <label>Annotation:</label><br>
+        <input type="text" id="ann" name="annotation">
+        <button type="submit">Submit</button>
+    </form>
+    <script>
+        function do(){
+        value = document.getElementById('ann').value
+        var xhr = new XMLHttpRequest();
+        var url = "http://172.28.0.11:5000/annotations_nl/";
+        xhr.open("POST", url, true);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState === 4 && xhr.status === 200) {
+                print("good")
+                }
+            };
+        var data = JSON.stringify({"value": value});
+        xhr.send(data);
+        }
+    </script>
+</body>
+</html>

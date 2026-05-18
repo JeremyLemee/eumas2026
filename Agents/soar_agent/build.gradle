@@ -1,0 +1,64 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group 'org.example'
+version '1.0-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    //SOAR
+    implementation 'com.soartech:jsoar-core:5.1.1'
+    implementation 'com.soartech:jsoar-debugger:5.1.1'
+    //implementation 'com.soartech:jsoar-soarunit:5.1.1'
+    //implementation 'com.soartech:jsoar-legilimens:5.1.1'
+
+    //Apache client
+    implementation 'org.apache.httpcomponents.client5:httpclient5:5.0'
+    implementation 'org.apache.httpcomponents.client5:httpclient5-fluent:5.0'
+
+
+    //RDF
+    implementation group: 'org.eclipse.rdf4j', name: 'rdf4j-rio-turtle', version: '5.0.1'
+    implementation group: 'org.eclipse.rdf4j', name: 'rdf4j-rio-jsonld', version: '5.0.1'
+    implementation group: 'org.eclipse.rdf4j', name: 'rdf4j-model', version: '5.0.1'
+
+    //Utils
+    implementation 'com.google.code.gson:gson:2.8.9'
+    // https://mvnrepository.com/artifact/org.jfree/jfreechart
+    implementation 'org.jfree:jfreechart:1.5.4'
+    implementation group: 'net.sf.jung', name: 'jung-visualization', version: '2.1.1'
+    implementation group: 'net.sf.jung', name: 'jung-algorithms', version: '2.1.1'
+    implementation 'org.apache.commons:commons-collections4:4.4'
+    implementation 'commons-collections:commons-collections:3.2.2'
+    implementation 'net.sourceforge.collections:collections-generic:4.01' //for collections15
+    implementation 'com.blazegraph:colt:2.1.4' //for bitvector
+    implementation 'net.sf.jung:jung-graph-impl:2.1'
+    // https://mvnrepository.com/artifact/org.json/json
+    implementation("org.json:json:20250517")
+
+    implementation fileTree(dir: 'lib', include: '*.jar')
+
+
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.8.1'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.8.1'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+application {
+    // Replace with your fully qualified main class name
+    mainClass = 'soar.SoarWebAgent'
+}

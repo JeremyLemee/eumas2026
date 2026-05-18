@@ -1,0 +1,11 @@
+API_KEY.txt
+gradle-wrapper.jar
+__pycache__/
+.gradle/
+build/
+.codex/
+.idea/
+setup_tools_log.txt
+evaluation_logs.md
+gui_logs/
+.venv/

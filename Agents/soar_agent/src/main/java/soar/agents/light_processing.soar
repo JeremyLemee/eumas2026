@@ -1,0 +1,1737 @@
+chunk on
+
+###############################################################################
+# KG-grounded light-processing agent with annotation-provided goals
+#
+# Expected goal input on input-link:
+#
+#   ^event-id <e>
+#   ^goal <g>
+#   <g> ^z1 <value1>
+#       ^z2 <value2>
+#       ^url <target-profile-url>
+#
+# Required RHS functions:
+# - discretize-light-level <numeric>
+# - kg-value <kg-url> <local-property-name>
+# - kg-action-field <kg-url> <device> <activate> <field>
+# - wait <milliseconds>
+#
+# Main control-flow design:
+# 1. Initialize URLs.
+# 2. Register profile and query annotations.
+# 3. Wait for an annotation-provided goal on the input-link.
+# 4. Copy the goal into persistent Soar state.
+# 5. Load the action model from the KG.
+# 6. Refresh raw percepts from the KG.
+# 7. Discretize z1/z2 light levels through a selected operator.
+# 8. Select and execute applicable KG actions.
+# 9. Refresh after every action.
+# 10. Confirm the pending action once its postcondition appears.
+# 11. Refresh again after confirmation before planning the next action.
+# 12. Complete the goal once the discretized state matches the goal.
+#
+# Important fixes:
+# - No self-negating elaboration rules for z1d/z2d.
+# - Action tie-breaking is done at the top state.
+# - After confirm-pending, ^needs-refresh true is set again, so the agent does
+#   not continue planning from a possibly stale percept object.
+# - Candidate action proposals are disabled while ^needs-refresh true exists.
+# - Refresh removes stale percept readiness flags.
+###############################################################################
+
+###############################################################################
+# Initialization
+###############################################################################
+
+sp {light-processing*propose*initialize
+   (state <s> ^superstate nil
+              -^light-processing-initialized true)
+-->
+   (print-action |[light-processing] PROPOSE initialize|)
+   (<o> ^name initialize-light-processing)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*apply*initialize
+   (state <s> ^superstate nil
+              ^operator <o>)
+   (<o> ^name initialize-light-processing)
+-->
+   (print-action |[light-processing] APPLY initialize|)
+   (<s> ^light-processing-initialized true
+        ^profile-url |http://localhost:8083/profile|
+        ^td-url |http://localhost:5001/td|
+        ^kg-url |http://localhost:8081/kg|
+        ^headers |{}|
+        ^max-iterations 100)
+}
+
+###############################################################################
+# Register profile once at startup
+###############################################################################
+
+sp {light-processing*propose*start
+   (state <s> ^superstate nil
+              ^light-processing-initialized true
+              ^profile-url <profile-url>
+              ^td-url <td-url>
+              -^started true)
+-->
+   (print-action |[light-processing] PROPOSE start: register profile|)
+   (<o> ^name start-light-processing)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*apply*start
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^profile-url <profile-url>
+              ^td-url <td-url>
+              ^io.output-link <ol>)
+   (<o> ^name start-light-processing)
+-->
+   (print-action |[light-processing] APPLY start: register profile|)
+
+   (<cmd1> ^td-url <td-url>
+           ^profile-url <profile-url>)
+   (<ol> ^register-profile <cmd1>)
+
+   (<s> ^started true)
+}
+
+###############################################################################
+# Waiting for a goal annotation
+###############################################################################
+
+sp {light-processing*propose*wait-for-goal-a
+   (state <s> ^superstate nil
+              ^started true
+              -^active-goal <ag>
+              ^profile-url <profile-url>
+              ^td-url <td-url>
+              ^io.input-link <il>)
+   -(<s> ^wait-toggle b)
+-->
+   (print-action |[light-processing] PROPOSE wait-for-goal A|)
+   (<o> ^name wait-for-goal
+        ^next-toggle b)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*propose*wait-for-goal-b
+   (state <s> ^superstate nil
+              ^started true
+              ^wait-toggle b
+              -^active-goal <ag>
+              ^profile-url <profile-url>
+              ^td-url <td-url>
+              ^io.input-link <il>)
+-->
+   (print-action |[light-processing] PROPOSE wait-for-goal B|)
+   (<o> ^name wait-for-goal
+        ^next-toggle a)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*apply*wait-for-goal-a
+   (state <s> ^superstate nil
+              ^operator <o>)
+   (<o> ^name wait-for-goal
+        ^next-toggle a)
+-->
+   (print-action |[light-processing] APPLY wait-for-goal A: waiting for automatically perceived annotation|)
+
+   (wait 5000)
+
+   (<s> ^wait-toggle a)
+   (<s> ^wait-toggle b -)
+}
+
+sp {light-processing*apply*wait-for-goal-b
+   (state <s> ^superstate nil
+              ^operator <o>)
+   (<o> ^name wait-for-goal
+        ^next-toggle b)
+-->
+   (print-action |[light-processing] APPLY wait-for-goal B: waiting for automatically perceived annotation|)
+
+   (wait 5000)
+
+   (<s> ^wait-toggle b)
+   (<s> ^wait-toggle a -)
+}
+
+###############################################################################
+# Begin a new goal event from annotation-provided input-link WMEs
+###############################################################################
+
+sp {light-processing*propose*begin-goal-event
+   (state <s> ^superstate nil
+              ^started true
+              -^active-goal <ag>
+              ^io.input-link <il>)
+   (<il> ^event-id <e>
+         ^goal <input-goal>)
+   (<input-goal> ^z1 <goal-z1>
+                 ^z2 <goal-z2>
+                 ^url <goal-url>)
+   -(<s> ^processed-event <e>)
+-->
+   (print-action |[light-processing] PROPOSE begin-goal-event: z1=| <goal-z1> | z2=| <goal-z2> | url=| <goal-url>)
+   (<o> ^name begin-goal-event
+        ^event-id <e>
+        ^goal-z1 <goal-z1>
+        ^goal-z2 <goal-z2>
+        ^goal-url <goal-url>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*prefer*begin-goal-event-over-wait
+   (state <s> ^superstate nil
+              ^operator <begin> +
+              ^operator <wait> +)
+   (<begin> ^name begin-goal-event)
+   (<wait> ^name wait-for-goal)
+-->
+   (print-action |[light-processing] PREFERENCE: begin-goal-event over wait-for-goal|)
+   (<s> ^operator <begin> > <wait>)
+}
+
+sp {light-processing*reset-action-model-loaded-on-begin
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^action-model-loaded true)
+   (<o> ^name begin-goal-event)
+-->
+   (print-action |[light-processing] RESET action-model-loaded for new goal|)
+   (<s> ^action-model-loaded true -)
+}
+
+sp {light-processing*remove-old-iteration-on-begin
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^iteration <old-iteration>)
+   (<o> ^name begin-goal-event)
+-->
+   (print-action |[light-processing] REMOVE old iteration counter before new goal|)
+   (<s> ^iteration <old-iteration> -)
+}
+
+sp {light-processing*apply*begin-goal-event
+   (state <s> ^superstate nil
+              ^operator <o>)
+   (<o> ^name begin-goal-event
+        ^event-id <e>
+        ^goal-z1 <goal-z1>
+        ^goal-z2 <goal-z2>
+        ^goal-url <goal-url>)
+-->
+   (print-action |[light-processing] APPLY begin-goal-event: copied goal into Soar state and reset iteration counter|)
+
+   (<ag> ^event-id <e>
+         ^z1 <goal-z1>
+         ^z2 <goal-z2>
+         ^url <goal-url>)
+
+   (<s> ^active-goal <ag>
+        ^goal-event <e>
+        ^goal-z1 <goal-z1>
+        ^goal-z2 <goal-z2>
+        ^goal-url <goal-url>
+        ^processed-event <e>
+        ^iteration 0
+        ^needs-refresh true)
+
+   (<s> ^wait-toggle a -)
+   (<s> ^wait-toggle b -)
+}
+
+###############################################################################
+# Failure handling
+###############################################################################
+
+sp {light-processing*propose*fail-goal-max-iterations
+   (state <s> ^superstate nil
+              ^started true
+              ^active-goal <ag>
+              ^goal-event <event-id>
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^goal-url <goal-url>
+              ^max-iterations <max>
+              ^iteration { <iteration> >= <max> })
+-->
+   (print-action |[light-processing] PROPOSE fail-goal: max iterations reached. iteration=| <iteration> | max=| <max>)
+   (<o> ^name fail-goal
+        ^reason max-iterations
+        ^event-id <event-id>
+        ^goal-z1 <goal-z1>
+        ^goal-z2 <goal-z2>
+        ^goal-url <goal-url>
+        ^iteration <iteration>
+        ^max-iterations <max>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*prefer*complete-goal-over-fail-goal
+   (state <s> ^superstate nil
+              ^operator <complete> +
+              ^operator <fail> +)
+   (<complete> ^name complete-goal)
+   (<fail> ^name fail-goal)
+-->
+   (print-action |[light-processing] PREFERENCE: complete-goal over fail-goal|)
+   (<s> ^operator <complete> > <fail>)
+}
+
+sp {light-processing*prefer*fail-goal-over-refresh
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <other> +)
+   (<fail> ^name fail-goal)
+   (<other> ^name refresh-kg)
+-->
+   (print-action |[light-processing] PREFERENCE: fail-goal over refresh-kg|)
+   (<s> ^operator <fail> > <other>)
+}
+
+sp {light-processing*prefer*fail-goal-over-load-action-model
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <other> +)
+   (<fail> ^name fail-goal)
+   (<other> ^name load-action-model)
+-->
+   (print-action |[light-processing] PREFERENCE: fail-goal over load-action-model|)
+   (<s> ^operator <fail> > <other>)
+}
+
+sp {light-processing*prefer*fail-goal-over-discretize
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <other> +)
+   (<fail> ^name fail-goal)
+   (<other> ^name discretize-percepts)
+-->
+   (print-action |[light-processing] PREFERENCE: fail-goal over discretize-percepts|)
+   (<s> ^operator <fail> > <other>)
+}
+
+sp {light-processing*prefer*fail-goal-over-action
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <other> +)
+   (<fail> ^name fail-goal)
+   (<other> ^name perform-kg-action)
+-->
+   (print-action |[light-processing] PREFERENCE: KG action over fail-goal|)
+   (<s> ^operator <other> > <fail>)
+}
+
+sp {light-processing*prefer*fail-goal-over-confirm
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <other> +)
+   (<fail> ^name fail-goal)
+   (<other> ^name confirm-pending)
+-->
+   (print-action |[light-processing] PREFERENCE: fail-goal over confirm-pending|)
+   (<s> ^operator <fail> > <other>)
+}
+
+sp {light-processing*prefer*fail-goal-over-wait-feedback
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <other> +)
+   (<fail> ^name fail-goal)
+   (<other> ^name wait-for-feedback)
+-->
+   (print-action |[light-processing] PREFERENCE: fail-goal over wait-for-feedback|)
+   (<s> ^operator <fail> > <other>)
+}
+
+sp {light-processing*apply*fail-goal
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^active-goal <ag>
+              ^goal-event <event-id>
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^goal-url <goal-url>
+              ^td-url <td-url>
+              ^io.output-link <ol>)
+   (<o> ^name fail-goal
+        ^reason <reason>)
+-->
+   (print-action |[light-processing] APPLY fail-goal: reason=| <reason> |; sending direct done=false annotation to | <goal-url>)
+
+   (<cmd-done> ^done false
+               ^reason <reason>
+               ^event-id <event-id>
+               ^goal-z1 <goal-z1>
+               ^goal-z2 <goal-z2>
+               ^url <goal-url>
+               ^td-url <td-url>)
+   (<ol> ^send-message <cmd-done>)
+
+   (<s> ^active-goal <ag> -
+        ^goal-event <event-id> -
+        ^goal-z1 <goal-z1> -
+        ^goal-z2 <goal-z2> -
+        ^goal-url <goal-url> -)
+
+   (print-action |[light-processing] APPLY fail-goal: failed event=| <event-id> | reason=| <reason> |; waiting for next goal|)
+}
+
+sp {light-processing*cleanup-percepts-during-fail
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^percepts <p>)
+   (<o> ^name fail-goal)
+-->
+   (<s> ^percepts <p> -)
+}
+
+sp {light-processing*cleanup-percepts-ready-during-fail
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^percepts-ready true)
+   (<o> ^name fail-goal)
+-->
+   (<s> ^percepts-ready true -)
+}
+
+sp {light-processing*cleanup-raw-percepts-ready-during-fail
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^raw-percepts-ready true)
+   (<o> ^name fail-goal)
+-->
+   (<s> ^raw-percepts-ready true -)
+}
+
+sp {light-processing*cleanup-needs-refresh-during-fail
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^needs-refresh true)
+   (<o> ^name fail-goal)
+-->
+   (<s> ^needs-refresh true -)
+}
+
+sp {light-processing*cleanup-pending-device-during-fail
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^pending-device <device>)
+   (<o> ^name fail-goal)
+-->
+   (<s> ^pending-device <device> -)
+}
+
+sp {light-processing*cleanup-pending-activate-during-fail
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^pending-activate <activate>)
+   (<o> ^name fail-goal)
+-->
+   (<s> ^pending-activate <activate> -)
+}
+
+sp {light-processing*cleanup-pending-post-attribute-during-fail
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^pending-post-attribute <post-attribute>)
+   (<o> ^name fail-goal)
+-->
+   (<s> ^pending-post-attribute <post-attribute> -)
+}
+
+sp {light-processing*cleanup-pending-post-value-during-fail
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^pending-post-value <post-value>)
+   (<o> ^name fail-goal)
+-->
+   (<s> ^pending-post-value <post-value> -)
+}
+
+sp {light-processing*cleanup-iteration-during-fail
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^iteration <iteration>)
+   (<o> ^name fail-goal)
+-->
+   (<s> ^iteration <iteration> -)
+}
+
+###############################################################################
+# Load the action model from the KG
+###############################################################################
+
+sp {light-processing*propose*load-action-model
+   (state <s> ^superstate nil
+              ^started true
+              ^active-goal <ag>
+              ^kg-url <kg-url>
+              ^iteration { <iteration> < <max> }
+              ^max-iterations <max>
+              -^action-model-loaded true)
+-->
+   (print-action |[light-processing] PROPOSE load-action-model|)
+   (<o> ^name load-action-model)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*apply*load-action-model
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^kg-url <kg-url>
+              ^iteration <iteration>)
+   (<o> ^name load-action-model)
+-->
+   (print-action |[light-processing] APPLY load-action-model from KG=| <kg-url> | iteration=| <iteration>)
+
+   (<a1> ^device L1
+         ^activate true
+         ^available (kg-action-field <kg-url> |L1| true |available|)
+         ^name (kg-action-field <kg-url> |L1| true |name|)
+         ^method (kg-action-field <kg-url> |L1| true |method|)
+         ^url (kg-action-field <kg-url> |L1| true |url|)
+         ^body (kg-action-field <kg-url> |L1| true |body|)
+         ^pre-attribute (kg-action-field <kg-url> |L1| true |pre-attribute|)
+         ^pre-value (kg-action-field <kg-url> |L1| true |pre-value|)
+         ^post-attribute (kg-action-field <kg-url> |L1| true |post-attribute|)
+         ^post-value (kg-action-field <kg-url> |L1| true |post-value|)
+         ^zone (kg-action-field <kg-url> |L1| true |zone|)
+         ^effect (kg-action-field <kg-url> |L1| true |effect|)
+         ^control (kg-action-field <kg-url> |L1| true |control|))
+
+   (<a2> ^device L1
+         ^activate false
+         ^available (kg-action-field <kg-url> |L1| false |available|)
+         ^name (kg-action-field <kg-url> |L1| false |name|)
+         ^method (kg-action-field <kg-url> |L1| false |method|)
+         ^url (kg-action-field <kg-url> |L1| false |url|)
+         ^body (kg-action-field <kg-url> |L1| false |body|)
+         ^pre-attribute (kg-action-field <kg-url> |L1| false |pre-attribute|)
+         ^pre-value (kg-action-field <kg-url> |L1| false |pre-value|)
+         ^post-attribute (kg-action-field <kg-url> |L1| false |post-attribute|)
+         ^post-value (kg-action-field <kg-url> |L1| false |post-value|)
+         ^zone (kg-action-field <kg-url> |L1| false |zone|)
+         ^effect (kg-action-field <kg-url> |L1| false |effect|)
+         ^control (kg-action-field <kg-url> |L1| false |control|))
+
+   (<a3> ^device L2
+         ^activate true
+         ^available (kg-action-field <kg-url> |L2| true |available|)
+         ^name (kg-action-field <kg-url> |L2| true |name|)
+         ^method (kg-action-field <kg-url> |L2| true |method|)
+         ^url (kg-action-field <kg-url> |L2| true |url|)
+         ^body (kg-action-field <kg-url> |L2| true |body|)
+         ^pre-attribute (kg-action-field <kg-url> |L2| true |pre-attribute|)
+         ^pre-value (kg-action-field <kg-url> |L2| true |pre-value|)
+         ^post-attribute (kg-action-field <kg-url> |L2| true |post-attribute|)
+         ^post-value (kg-action-field <kg-url> |L2| true |post-value|)
+         ^zone (kg-action-field <kg-url> |L2| true |zone|)
+         ^effect (kg-action-field <kg-url> |L2| true |effect|)
+         ^control (kg-action-field <kg-url> |L2| true |control|))
+
+   (<a4> ^device L2
+         ^activate false
+         ^available (kg-action-field <kg-url> |L2| false |available|)
+         ^name (kg-action-field <kg-url> |L2| false |name|)
+         ^method (kg-action-field <kg-url> |L2| false |method|)
+         ^url (kg-action-field <kg-url> |L2| false |url|)
+         ^body (kg-action-field <kg-url> |L2| false |body|)
+         ^pre-attribute (kg-action-field <kg-url> |L2| false |pre-attribute|)
+         ^pre-value (kg-action-field <kg-url> |L2| false |pre-value|)
+         ^post-attribute (kg-action-field <kg-url> |L2| false |post-attribute|)
+         ^post-value (kg-action-field <kg-url> |L2| false |post-value|)
+         ^zone (kg-action-field <kg-url> |L2| false |zone|)
+         ^effect (kg-action-field <kg-url> |L2| false |effect|)
+         ^control (kg-action-field <kg-url> |L2| false |control|))
+
+   (<a5> ^device B1
+         ^activate true
+         ^available (kg-action-field <kg-url> |B1| true |available|)
+         ^name (kg-action-field <kg-url> |B1| true |name|)
+         ^method (kg-action-field <kg-url> |B1| true |method|)
+         ^url (kg-action-field <kg-url> |B1| true |url|)
+         ^body (kg-action-field <kg-url> |B1| true |body|)
+         ^pre-attribute (kg-action-field <kg-url> |B1| true |pre-attribute|)
+         ^pre-value (kg-action-field <kg-url> |B1| true |pre-value|)
+         ^post-attribute (kg-action-field <kg-url> |B1| true |post-attribute|)
+         ^post-value (kg-action-field <kg-url> |B1| true |post-value|)
+         ^zone (kg-action-field <kg-url> |B1| true |zone|)
+         ^effect (kg-action-field <kg-url> |B1| true |effect|)
+         ^control (kg-action-field <kg-url> |B1| true |control|))
+
+   (<a6> ^device B1
+         ^activate false
+         ^available (kg-action-field <kg-url> |B1| false |available|)
+         ^name (kg-action-field <kg-url> |B1| false |name|)
+         ^method (kg-action-field <kg-url> |B1| false |method|)
+         ^url (kg-action-field <kg-url> |B1| false |url|)
+         ^body (kg-action-field <kg-url> |B1| false |body|)
+         ^pre-attribute (kg-action-field <kg-url> |B1| false |pre-attribute|)
+         ^pre-value (kg-action-field <kg-url> |B1| false |pre-value|)
+         ^post-attribute (kg-action-field <kg-url> |B1| false |post-attribute|)
+         ^post-value (kg-action-field <kg-url> |B1| false |post-value|)
+         ^zone (kg-action-field <kg-url> |B1| false |zone|)
+         ^effect (kg-action-field <kg-url> |B1| false |effect|)
+         ^control (kg-action-field <kg-url> |B1| false |control|))
+
+   (<a7> ^device B2
+         ^activate true
+         ^available (kg-action-field <kg-url> |B2| true |available|)
+         ^name (kg-action-field <kg-url> |B2| true |name|)
+         ^method (kg-action-field <kg-url> |B2| true |method|)
+         ^url (kg-action-field <kg-url> |B2| true |url|)
+         ^body (kg-action-field <kg-url> |B2| true |body|)
+         ^pre-attribute (kg-action-field <kg-url> |B2| true |pre-attribute|)
+         ^pre-value (kg-action-field <kg-url> |B2| true |pre-value|)
+         ^post-attribute (kg-action-field <kg-url> |B2| true |post-attribute|)
+         ^post-value (kg-action-field <kg-url> |B2| true |post-value|)
+         ^zone (kg-action-field <kg-url> |B2| true |zone|)
+         ^effect (kg-action-field <kg-url> |B2| true |effect|)
+         ^control (kg-action-field <kg-url> |B2| true |control|))
+
+   (<a8> ^device B2
+         ^activate false
+         ^available (kg-action-field <kg-url> |B2| false |available|)
+         ^name (kg-action-field <kg-url> |B2| false |name|)
+         ^method (kg-action-field <kg-url> |B2| false |method|)
+         ^url (kg-action-field <kg-url> |B2| false |url|)
+         ^body (kg-action-field <kg-url> |B2| false |body|)
+         ^pre-attribute (kg-action-field <kg-url> |B2| false |pre-attribute|)
+         ^pre-value (kg-action-field <kg-url> |B2| false |pre-value|)
+         ^post-attribute (kg-action-field <kg-url> |B2| false |post-attribute|)
+         ^post-value (kg-action-field <kg-url> |B2| false |post-value|)
+         ^zone (kg-action-field <kg-url> |B2| false |zone|)
+         ^effect (kg-action-field <kg-url> |B2| false |effect|)
+         ^control (kg-action-field <kg-url> |B2| false |control|))
+
+   (<s> ^action <a1>
+        ^action <a2>
+        ^action <a3>
+        ^action <a4>
+        ^action <a5>
+        ^action <a6>
+        ^action <a7>
+        ^action <a8>
+        ^action-model-loaded true
+        ^needs-refresh true)
+
+   (<s> ^iteration <iteration> -)
+   (<s> ^iteration (+ <iteration> 1))
+}
+
+###############################################################################
+# Normalize KG action vocabulary to local percept vocabulary
+###############################################################################
+
+sp {light-processing*normalize*zone-z1-upper
+   (state <s> ^action <a>)
+   (<a> ^zone Z1)
+-->
+   (<a> ^zone-local Z1)
+}
+
+sp {light-processing*normalize*zone-z1-lower
+   (state <s> ^action <a>)
+   (<a> ^zone z1)
+-->
+   (<a> ^zone-local Z1)
+}
+
+sp {light-processing*normalize*zone-z2-upper
+   (state <s> ^action <a>)
+   (<a> ^zone Z2)
+-->
+   (<a> ^zone-local Z2)
+}
+
+sp {light-processing*normalize*zone-z2-lower
+   (state <s> ^action <a>)
+   (<a> ^zone z2)
+-->
+   (<a> ^zone-local Z2)
+}
+
+sp {light-processing*normalize*effect-increase
+   (state <s> ^action <a>)
+   (<a> ^effect increase)
+-->
+   (<a> ^effect-local increase)
+}
+
+sp {light-processing*normalize*effect-increase-capitalized
+   (state <s> ^action <a>)
+   (<a> ^effect Increase)
+-->
+   (<a> ^effect-local increase)
+}
+
+sp {light-processing*normalize*effect-decrease
+   (state <s> ^action <a>)
+   (<a> ^effect decrease)
+-->
+   (<a> ^effect-local decrease)
+}
+
+sp {light-processing*normalize*effect-decrease-capitalized
+   (state <s> ^action <a>)
+   (<a> ^effect Decrease)
+-->
+   (<a> ^effect-local decrease)
+}
+
+sp {light-processing*normalize*control-light
+   (state <s> ^action <a>)
+   (<a> ^control light)
+-->
+   (<a> ^control-local light)
+}
+
+sp {light-processing*normalize*control-light-capitalized
+   (state <s> ^action <a>)
+   (<a> ^control Light)
+-->
+   (<a> ^control-local light)
+}
+
+sp {light-processing*normalize*control-blinds
+   (state <s> ^action <a>)
+   (<a> ^control blinds)
+-->
+   (<a> ^control-local blinds)
+}
+
+sp {light-processing*normalize*control-blinds-capitalized
+   (state <s> ^action <a>)
+   (<a> ^control Blinds)
+-->
+   (<a> ^control-local blinds)
+}
+
+sp {light-processing*normalize*control-blind-singular
+   (state <s> ^action <a>)
+   (<a> ^control blind)
+-->
+   (<a> ^control-local blinds)
+}
+
+sp {light-processing*normalize*pre-z1level-local
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute z1level)
+-->
+   (<a> ^pre-local z1level)
+}
+
+sp {light-processing*normalize*pre-z2level-local
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute z2level)
+-->
+   (<a> ^pre-local z2level)
+}
+
+sp {light-processing*normalize*pre-z1light-local
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute z1light)
+-->
+   (<a> ^pre-local z1light)
+}
+
+sp {light-processing*normalize*pre-z2light-local
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute z2light)
+-->
+   (<a> ^pre-local z2light)
+}
+
+sp {light-processing*normalize*pre-z1blinds-local
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute z1blinds)
+-->
+   (<a> ^pre-local z1blinds)
+}
+
+sp {light-processing*normalize*pre-z2blinds-local
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute z2blinds)
+-->
+   (<a> ^pre-local z2blinds)
+}
+
+sp {light-processing*normalize*pre-l1-status-local
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute l1-status)
+-->
+   (<a> ^pre-local l1-status)
+}
+
+sp {light-processing*normalize*pre-l2-status-local
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute l2-status)
+-->
+   (<a> ^pre-local l2-status)
+}
+
+sp {light-processing*normalize*pre-b1-status-local
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute b1-status)
+-->
+   (<a> ^pre-local b1-status)
+}
+
+sp {light-processing*normalize*pre-b2-status-local
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute b2-status)
+-->
+   (<a> ^pre-local b2-status)
+}
+
+sp {light-processing*normalize*pre-z1level-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute hasZ1Level)
+-->
+   (<a> ^pre-local z1level)
+}
+
+sp {light-processing*normalize*pre-z2level-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute hasZ2Level)
+-->
+   (<a> ^pre-local z2level)
+}
+
+sp {light-processing*normalize*pre-z1light-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute hasZ1Light)
+-->
+   (<a> ^pre-local z1light)
+}
+
+sp {light-processing*normalize*pre-z2light-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute hasZ2Light)
+-->
+   (<a> ^pre-local z2light)
+}
+
+sp {light-processing*normalize*pre-z1blinds-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute hasZ1Blinds)
+-->
+   (<a> ^pre-local z1blinds)
+}
+
+sp {light-processing*normalize*pre-z2blinds-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute hasZ2Blinds)
+-->
+   (<a> ^pre-local z2blinds)
+}
+
+sp {light-processing*normalize*pre-l1-status-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute L1Status)
+-->
+   (<a> ^pre-local l1-status)
+}
+
+sp {light-processing*normalize*pre-l2-status-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute L2Status)
+-->
+   (<a> ^pre-local l2-status)
+}
+
+sp {light-processing*normalize*pre-b1-status-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute B1Status)
+-->
+   (<a> ^pre-local b1-status)
+}
+
+sp {light-processing*normalize*pre-b2-status-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^pre-attribute B2Status)
+-->
+   (<a> ^pre-local b2-status)
+}
+
+sp {light-processing*normalize*post-z1level-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^post-attribute hasZ1Level)
+-->
+   (<a> ^post-local z1level)
+}
+
+sp {light-processing*normalize*post-z2level-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^post-attribute hasZ2Level)
+-->
+   (<a> ^post-local z2level)
+}
+
+sp {light-processing*normalize*post-z1light-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^post-attribute hasZ1Light)
+-->
+   (<a> ^post-local z1light)
+}
+
+sp {light-processing*normalize*post-z2light-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^post-attribute hasZ2Light)
+-->
+   (<a> ^post-local z2light)
+}
+
+sp {light-processing*normalize*post-z1blinds-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^post-attribute hasZ1Blinds)
+-->
+   (<a> ^post-local z1blinds)
+}
+
+sp {light-processing*normalize*post-z2blinds-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^post-attribute hasZ2Blinds)
+-->
+   (<a> ^post-local z2blinds)
+}
+
+sp {light-processing*normalize*post-l1-status-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^post-attribute L1Status)
+-->
+   (<a> ^post-local l1-status)
+}
+
+sp {light-processing*normalize*post-l2-status-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^post-attribute L2Status)
+-->
+   (<a> ^post-local l2-status)
+}
+
+sp {light-processing*normalize*post-b1-status-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^post-attribute B1Status)
+-->
+   (<a> ^post-local b1-status)
+}
+
+sp {light-processing*normalize*post-b2-status-rdf-local-name
+   (state <s> ^action <a>)
+   (<a> ^post-attribute B2Status)
+-->
+   (<a> ^post-local b2-status)
+}
+
+sp {light-processing*normalize*post-z1level-local
+   (state <s> ^action <a>)
+   (<a> ^post-attribute z1level)
+-->
+   (<a> ^post-local z1level)
+}
+
+sp {light-processing*normalize*post-z2level-local
+   (state <s> ^action <a>)
+   (<a> ^post-attribute z2level)
+-->
+   (<a> ^post-local z2level)
+}
+
+sp {light-processing*normalize*post-z1light-local
+   (state <s> ^action <a>)
+   (<a> ^post-attribute z1light)
+-->
+   (<a> ^post-local z1light)
+}
+
+sp {light-processing*normalize*post-z2light-local
+   (state <s> ^action <a>)
+   (<a> ^post-attribute z2light)
+-->
+   (<a> ^post-local z2light)
+}
+
+sp {light-processing*normalize*post-z1blinds-local
+   (state <s> ^action <a>)
+   (<a> ^post-attribute z1blinds)
+-->
+   (<a> ^post-local z1blinds)
+}
+
+sp {light-processing*normalize*post-z2blinds-local
+   (state <s> ^action <a>)
+   (<a> ^post-attribute z2blinds)
+-->
+   (<a> ^post-local z2blinds)
+}
+
+sp {light-processing*normalize*post-l1-status-local
+   (state <s> ^action <a>)
+   (<a> ^post-attribute l1-status)
+-->
+   (<a> ^post-local l1-status)
+}
+
+sp {light-processing*normalize*post-l2-status-local
+   (state <s> ^action <a>)
+   (<a> ^post-attribute l2-status)
+-->
+   (<a> ^post-local l2-status)
+}
+
+sp {light-processing*normalize*post-b1-status-local
+   (state <s> ^action <a>)
+   (<a> ^post-attribute b1-status)
+-->
+   (<a> ^post-local b1-status)
+}
+
+sp {light-processing*normalize*post-b2-status-local
+   (state <s> ^action <a>)
+   (<a> ^post-attribute b2-status)
+-->
+   (<a> ^post-local b2-status)
+}
+
+###############################################################################
+# Refresh raw percepts from the KG
+###############################################################################
+
+sp {light-processing*propose*refresh-kg-initial
+   (state <s> ^superstate nil
+              ^started true
+              ^active-goal <ag>
+              ^action-model-loaded true
+              ^iteration { <iteration> < <max> }
+              ^max-iterations <max>
+              -^percepts-ready true
+              -^raw-percepts-ready true)
+-->
+   (print-action |[light-processing] PROPOSE refresh-kg: initial percepts missing|)
+   (<o> ^name refresh-kg
+        ^reason initial-percepts-missing)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*propose*refresh-kg-needed
+   (state <s> ^superstate nil
+              ^started true
+              ^active-goal <ag>
+              ^action-model-loaded true
+              ^needs-refresh true
+              ^iteration { <iteration> < <max> }
+              ^max-iterations <max>
+              -^raw-percepts-ready true)
+-->
+   (print-action |[light-processing] PROPOSE refresh-kg: refresh requested|)
+   (<o> ^name refresh-kg
+        ^reason refresh-requested)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*remove-old-percepts-during-refresh
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^percepts <old>)
+   (<o> ^name refresh-kg)
+-->
+   (print-action |[light-processing] REMOVE old percept object before KG refresh|)
+   (<s> ^percepts <old> -)
+}
+
+sp {light-processing*remove-percepts-ready-during-refresh
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^percepts-ready true)
+   (<o> ^name refresh-kg)
+-->
+   (print-action |[light-processing] REMOVE percepts-ready during KG refresh|)
+   (<s> ^percepts-ready true -)
+}
+
+sp {light-processing*remove-raw-percepts-ready-during-refresh
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^raw-percepts-ready true)
+   (<o> ^name refresh-kg)
+-->
+   (print-action |[light-processing] REMOVE raw-percepts-ready during KG refresh|)
+   (<s> ^raw-percepts-ready true -)
+}
+
+sp {light-processing*apply*refresh-kg
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^kg-url <kg-url>
+              ^iteration <iteration>)
+   (<o> ^name refresh-kg
+        ^reason <reason>)
+-->
+   (print-action |[light-processing] APPLY refresh-kg: reason=| <reason> | iteration=| <iteration>)
+
+   (<p> ^z1level (kg-value <kg-url> |hasZ1Level|)
+        ^z2level (kg-value <kg-url> |hasZ2Level|)
+        ^z1light (kg-value <kg-url> |hasZ1Light|)
+        ^z2light (kg-value <kg-url> |hasZ2Light|)
+        ^z1blinds (kg-value <kg-url> |hasZ1Blinds|)
+        ^z2blinds (kg-value <kg-url> |hasZ2Blinds|)
+        ^l1-status (kg-value <kg-url> |L1Status|)
+        ^l2-status (kg-value <kg-url> |L2Status|)
+        ^b1-status (kg-value <kg-url> |B1Status|)
+        ^b2-status (kg-value <kg-url> |B2Status|)
+        ^sunshine (kg-value <kg-url> |hasSunshine|))
+
+   (<s> ^percepts <p>
+        ^raw-percepts-ready true)
+
+   (<s> ^needs-refresh true -)
+
+   (<s> ^iteration <iteration> -)
+   (<s> ^iteration (+ <iteration> 1))
+}
+
+###############################################################################
+# Discretize raw percepts
+#
+# This must be an operator application, not a self-negating elaboration.
+###############################################################################
+
+sp {light-processing*propose*discretize-percepts
+   (state <s> ^superstate nil
+              ^started true
+              ^active-goal <ag>
+              ^raw-percepts-ready true
+              ^percepts <p>
+              -^percepts-ready true)
+   (<p> ^z1level <z1level>
+        ^z2level <z2level>)
+   -(<p> ^z1d <z1d>)
+   -(<p> ^z2d <z2d>)
+-->
+   (print-action |[light-processing] PROPOSE discretize-percepts: z1level=| <z1level> | z2level=| <z2level>)
+   (<o> ^name discretize-percepts
+        ^z1level <z1level>
+        ^z2level <z2level>)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*prefer*discretize-over-refresh
+   (state <s> ^superstate nil
+              ^operator <disc> +
+              ^operator <refresh> +)
+   (<disc> ^name discretize-percepts)
+   (<refresh> ^name refresh-kg)
+-->
+   (print-action |[light-processing] PREFERENCE: discretize-percepts over refresh-kg|)
+   (<s> ^operator <disc> > <refresh>)
+}
+
+sp {light-processing*apply*discretize-percepts
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^percepts <p>)
+   (<o> ^name discretize-percepts
+        ^z1level <z1level>
+        ^z2level <z2level>)
+-->
+   (print-action |[light-processing] APPLY discretize-percepts|)
+
+   (<p> ^z1d (discretize-light-level <z1level>)
+        ^z2d (discretize-light-level <z2level>))
+
+   (<s> ^percepts-ready true)
+   (<s> ^raw-percepts-ready true -)
+}
+
+###############################################################################
+# Goal completion
+###############################################################################
+
+sp {light-processing*propose*complete-goal
+   (state <s> ^superstate nil
+              ^started true
+              ^active-goal <ag>
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^goal-url <goal-url>
+              ^goal-event <event-id>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<p> ^z1d <goal-z1>
+        ^z2d <goal-z2>)
+-->
+   (print-action |[light-processing] PROPOSE complete-goal: achieved z1=| <goal-z1> | z2=| <goal-z2>)
+   (<o> ^name complete-goal
+        ^event-id <event-id>
+        ^goal-z1 <goal-z1>
+        ^goal-z2 <goal-z2>
+        ^goal-url <goal-url>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*prefer*complete-goal
+   (state <s> ^superstate nil
+              ^operator <o> +)
+   (<o> ^name complete-goal)
+-->
+   (print-action |[light-processing] PREFERENCE: complete-goal is best|)
+   (<s> ^operator <o> >)
+}
+
+sp {light-processing*apply*complete-goal
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^active-goal <ag>
+              ^goal-event <event-id>
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^goal-url <goal-url>
+              ^percepts <p>
+              ^td-url <td-url>
+              ^io.output-link <ol>)
+   (<o> ^name complete-goal
+        ^event-id <event-id>
+        ^goal-z1 <goal-z1>
+        ^goal-z2 <goal-z2>
+        ^goal-url <goal-url>)
+-->
+   (print-action |[light-processing] APPLY complete-goal: sending done message to | <goal-url>)
+
+   (<cmd-done> ^done true
+               ^reason achieved
+               ^event-id <event-id>
+               ^goal-z1 <goal-z1>
+               ^goal-z2 <goal-z2>
+               ^url <goal-url>
+               ^td-url <td-url>)
+   (<ol> ^send-message <cmd-done>)
+
+   (<s> ^active-goal <ag> -
+        ^goal-event <event-id> -
+        ^goal-z1 <goal-z1> -
+        ^goal-z2 <goal-z2> -
+        ^goal-url <goal-url> -
+        ^percepts <p> -
+        ^percepts-ready true -)
+
+   (<s> ^raw-percepts-ready true -)
+   (<s> ^needs-refresh true -)
+
+   (print-action |[light-processing] APPLY complete-goal: waiting for next goal|)
+}
+
+sp {light-processing*cleanup-iteration-during-complete
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^iteration <iteration>)
+   (<o> ^name complete-goal)
+-->
+   (<s> ^iteration <iteration> -)
+}
+
+###############################################################################
+# Confirm pending action from KG-refreshed percepts
+#
+# Crucial fix:
+# After confirmation, request one more refresh before planning again.
+# The action postcondition may only confirm actuator state, while the next
+# planning step depends on updated light-level state.
+###############################################################################
+
+sp {light-processing*propose*confirm-pending
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^pending-device <device>
+              ^pending-activate <activate>
+              ^pending-post-attribute <post-attribute>
+              ^pending-post-value <post-value>
+              ^percepts <p>
+              ^percepts-ready true
+              -^needs-refresh true)
+   (<p> ^<post-attribute> <post-value>)
+-->
+   (print-action |[light-processing] PROPOSE confirm-pending: device=| <device> | activate=| <activate> | post=| <post-attribute> |=| <post-value>)
+   (<o> ^name confirm-pending
+        ^device <device>
+        ^activate <activate>
+        ^post-attribute <post-attribute>
+        ^post-value <post-value>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*prefer*confirm-pending
+   (state <s> ^superstate nil
+              ^operator <o> +)
+   (<o> ^name confirm-pending)
+-->
+   (print-action |[light-processing] PREFERENCE: confirm-pending is best|)
+   (<s> ^operator <o> >)
+}
+
+sp {light-processing*apply*confirm-pending
+   (state <s> ^superstate nil
+              ^operator <o>)
+   (<o> ^name confirm-pending
+        ^device <device>
+        ^activate <activate>
+        ^post-attribute <post-attribute>
+        ^post-value <post-value>)
+-->
+   (print-action |[light-processing] APPLY confirm-pending: confirmed device=| <device> | activate=| <activate> |; requesting fresh KG state before next decision|)
+
+   (<s> ^pending-device <device> -
+        ^pending-activate <activate> -
+        ^pending-post-attribute <post-attribute> -
+        ^pending-post-value <post-value> -
+        ^needs-refresh true)
+}
+
+###############################################################################
+# Wait for feedback if a pending action has not yet appeared in the KG state
+###############################################################################
+
+sp {light-processing*propose*wait-for-feedback
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^pending-device <device>
+              ^pending-post-attribute <post-attribute>
+              ^pending-post-value <post-value>
+              ^percepts <p>
+              ^percepts-ready true
+              -^needs-refresh true)
+   -(<p> ^<post-attribute> <post-value>)
+-->
+   (print-action |[light-processing] PROPOSE wait-for-feedback: pending device=| <device>)
+   (<o> ^name wait-for-feedback
+        ^device <device>)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*apply*wait-for-feedback
+   (state <s> ^superstate nil
+              ^operator <o>)
+   (<o> ^name wait-for-feedback
+        ^device <device>)
+-->
+   (print-action |[light-processing] APPLY wait-for-feedback: device=| <device>)
+   (wait 100)
+   (<s> ^needs-refresh true)
+}
+
+###############################################################################
+# Candidate operators for the problem space
+###############################################################################
+
+sp {light-processing*propose*z1*increase
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^goal-z1 <goal-z1>
+              ^percepts <p>
+              ^action <a>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<p> ^z1d { <z1d> < <goal-z1> })
+   (<a> ^available true
+        ^zone-local Z1
+        ^effect-local increase
+        ^pre-local <pre-attribute>
+        ^pre-value <pre-value>
+        ^post-local <post-attribute>
+        ^post-value <post-value>
+        ^device <device>
+        ^activate <activate>
+        ^name <action-name>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^control-local <control>)
+   (<p> ^<pre-attribute> <pre-value>)
+-->
+   (print-action |[light-processing] PROPOSE Z1 increase: z1d=| <z1d> | goal=| <goal-z1> | action=| <action-name> | control=| <control>)
+   (<o> ^name perform-kg-action
+        ^action-name <action-name>
+        ^zone Z1
+        ^effect increase
+        ^control <control>
+        ^device <device>
+        ^activate <activate>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^post-attribute <post-attribute>
+        ^post-value <post-value>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*propose*z1*decrease
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^goal-z1 <goal-z1>
+              ^percepts <p>
+              ^action <a>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<p> ^z1d { <z1d> > <goal-z1> })
+   (<a> ^available true
+        ^zone-local Z1
+        ^effect-local decrease
+        ^pre-local <pre-attribute>
+        ^pre-value <pre-value>
+        ^post-local <post-attribute>
+        ^post-value <post-value>
+        ^device <device>
+        ^activate <activate>
+        ^name <action-name>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^control-local <control>)
+   (<p> ^<pre-attribute> <pre-value>)
+-->
+   (print-action |[light-processing] PROPOSE Z1 decrease: z1d=| <z1d> | goal=| <goal-z1> | action=| <action-name> | control=| <control>)
+   (<o> ^name perform-kg-action
+        ^action-name <action-name>
+        ^zone Z1
+        ^effect decrease
+        ^control <control>
+        ^device <device>
+        ^activate <activate>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^post-attribute <post-attribute>
+        ^post-value <post-value>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*propose*z2*increase
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^goal-z2 <goal-z2>
+              ^percepts <p>
+              ^action <a>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<p> ^z2d { <z2d> < <goal-z2> })
+   (<a> ^available true
+        ^zone-local Z2
+        ^effect-local increase
+        ^pre-local <pre-attribute>
+        ^pre-value <pre-value>
+        ^post-local <post-attribute>
+        ^post-value <post-value>
+        ^device <device>
+        ^activate <activate>
+        ^name <action-name>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^control-local <control>)
+   (<p> ^<pre-attribute> <pre-value>)
+-->
+   (print-action |[light-processing] PROPOSE Z2 increase: z2d=| <z2d> | goal=| <goal-z2> | action=| <action-name> | control=| <control>)
+   (<o> ^name perform-kg-action
+        ^action-name <action-name>
+        ^zone Z2
+        ^effect increase
+        ^control <control>
+        ^device <device>
+        ^activate <activate>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^post-attribute <post-attribute>
+        ^post-value <post-value>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*propose*z2*decrease
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^goal-z2 <goal-z2>
+              ^percepts <p>
+              ^action <a>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<p> ^z2d { <z2d> > <goal-z2> })
+   (<a> ^available true
+        ^zone-local Z2
+        ^effect-local decrease
+        ^pre-local <pre-attribute>
+        ^pre-value <pre-value>
+        ^post-local <post-attribute>
+        ^post-value <post-value>
+        ^device <device>
+        ^activate <activate>
+        ^name <action-name>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^control-local <control>)
+   (<p> ^<pre-attribute> <pre-value>)
+-->
+   (print-action |[light-processing] PROPOSE Z2 decrease: z2d=| <z2d> | goal=| <goal-z2> | action=| <action-name> | control=| <control>)
+   (<o> ^name perform-kg-action
+        ^action-name <action-name>
+        ^zone Z2
+        ^effect decrease
+        ^control <control>
+        ^device <device>
+        ^activate <activate>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^post-attribute <post-attribute>
+        ^post-value <post-value>)
+   (<s> ^operator <o> +)
+}
+
+###############################################################################
+# Top-state action selection preferences
+###############################################################################
+
+sp {light-processing*prefer*increase*blinds-over-light
+   (state <s> ^superstate nil
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<o1> ^name perform-kg-action
+         ^effect increase
+         ^zone <zone>
+         ^control blinds
+         ^action-name <n1>)
+   (<o2> ^name perform-kg-action
+         ^effect increase
+         ^zone <zone>
+         ^control light
+         ^action-name <n2>)
+-->
+   (print-action |[light-processing] PREFERENCE: increase in same zone, prefer blinds over light; prefer | <n1> | over | <n2>)
+   (<s> ^operator <o1> > <o2>)
+}
+
+sp {light-processing*prefer*decrease*light-over-blinds
+   (state <s> ^superstate nil
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<o1> ^name perform-kg-action
+         ^effect decrease
+         ^zone <zone>
+         ^control light
+         ^action-name <n1>)
+   (<o2> ^name perform-kg-action
+         ^effect decrease
+         ^zone <zone>
+         ^control blinds
+         ^action-name <n2>)
+-->
+   (print-action |[light-processing] PREFERENCE: decrease in same zone, prefer light over blinds; prefer | <n1> | over | <n2>)
+   (<s> ^operator <o1> > <o2>)
+}
+
+sp {light-processing*prefer*z1-over-z2
+   (state <s> ^superstate nil
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<o1> ^name perform-kg-action
+         ^zone Z1
+         ^action-name <n1>)
+   (<o2> ^name perform-kg-action
+         ^zone Z2
+         ^action-name <n2>)
+-->
+   (print-action |[light-processing] PREFERENCE: default prefer Z1 over Z2; prefer | <n1> | over | <n2>)
+   (<s> ^operator <o1> > <o2>)
+}
+
+###############################################################################
+# Apply selected KG action
+###############################################################################
+
+sp {light-processing*apply*kg-action
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^operator <o>
+              ^headers <headers>
+              ^iteration <iteration>
+              ^io.output-link <ol>)
+   (<o> ^name perform-kg-action
+        ^action-name <action-name>
+        ^device <device>
+        ^activate <activate>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^post-attribute <post-attribute>
+        ^post-value <post-value>)
+-->
+   (print-action |[light-processing] APPLY KG action: | <action-name> | device=| <device> | activate=| <activate> | url=| <url> | body=| <body> | iteration=| <iteration>)
+
+   (<req> ^method <method>
+          ^url <url>
+          ^headers <headers>
+          ^payload <body>)
+
+   (<ol> ^send-http-request <req>)
+
+   (<s> ^pending-device <device>
+        ^pending-activate <activate>
+        ^pending-post-attribute <post-attribute>
+        ^pending-post-value <post-value>
+        ^needs-refresh true)
+
+   (<s> ^iteration <iteration> -)
+   (<s> ^iteration (+ <iteration> 1))
+}
+
+###############################################################################
+# Diagnostic fallback operators
+#
+# These do not repair a bad KG model, but they prevent silent stopping.
+# If one of these fires, the KG action model and the percept attribute/value
+# vocabulary are inconsistent for the needed direction.
+###############################################################################
+
+sp {light-processing*propose*diagnose-z1-needs-increase
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^goal-event <event-id>
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^goal-url <goal-url>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<p> ^z1d { <z1d> < <goal-z1> })
+-->
+   (print-action |[light-processing] PROPOSE fail-goal: Z1 needs increase, but no applicable action was proposed|)
+   (<o> ^name fail-goal
+        ^reason no-applicable-action
+        ^event-id <event-id>
+        ^goal-z1 <goal-z1>
+        ^goal-z2 <goal-z2>
+        ^goal-url <goal-url>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*propose*diagnose-z1-needs-decrease
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^goal-event <event-id>
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^goal-url <goal-url>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<p> ^z1d { <z1d> > <goal-z1> })
+-->
+   (print-action |[light-processing] PROPOSE fail-goal: Z1 needs decrease, but no applicable action was proposed|)
+   (<o> ^name fail-goal
+        ^reason no-applicable-action
+        ^event-id <event-id>
+        ^goal-z1 <goal-z1>
+        ^goal-z2 <goal-z2>
+        ^goal-url <goal-url>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*propose*diagnose-z2-needs-increase
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^goal-event <event-id>
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^goal-url <goal-url>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<p> ^z2d { <z2d> < <goal-z2> })
+-->
+   (print-action |[light-processing] PROPOSE fail-goal: Z2 needs increase, but no applicable action was proposed|)
+   (<o> ^name fail-goal
+        ^reason no-applicable-action
+        ^event-id <event-id>
+        ^goal-z1 <goal-z1>
+        ^goal-z2 <goal-z2>
+        ^goal-url <goal-url>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*propose*diagnose-z2-needs-decrease
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^goal-event <event-id>
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^goal-url <goal-url>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<p> ^z2d { <z2d> > <goal-z2> })
+-->
+   (print-action |[light-processing] PROPOSE fail-goal: Z2 needs decrease, but no applicable action was proposed|)
+   (<o> ^name fail-goal
+        ^reason no-applicable-action
+        ^event-id <event-id>
+        ^goal-z1 <goal-z1>
+        ^goal-z2 <goal-z2>
+        ^goal-url <goal-url>)
+   (<s> ^operator <o> +)
+}
+
+###############################################################################
+# Output-link cleanup
+#
+# The Java output handler should add:
+#   ^status complete
+# to command objects after executing them.
+###############################################################################
+
+sp {light-processing*cleanup*completed-http-request
+   (state <s> ^superstate nil
+              ^io.output-link <ol>)
+   (<ol> ^send-http-request <req>)
+   (<req> ^status complete)
+-->
+   (print-action |[light-processing] CLEANUP completed HTTP request|)
+   (<ol> ^send-http-request <req> -)
+}
+
+sp {light-processing*cleanup*completed-register-profile
+   (state <s> ^superstate nil
+              ^io.output-link <ol>)
+   (<ol> ^register-profile <cmd>)
+   (<cmd> ^status complete)
+-->
+   (print-action |[light-processing] CLEANUP completed register-profile command|)
+   (<ol> ^register-profile <cmd> -)
+}
+
+sp {light-processing*cleanup*completed-send-message
+   (state <s> ^superstate nil
+              ^io.output-link <ol>)
+   (<ol> ^send-message <cmd>)
+   (<cmd> ^status complete)
+-->
+   (print-action |[light-processing] CLEANUP completed send-message command|)
+   (<ol> ^send-message <cmd> -)
+}

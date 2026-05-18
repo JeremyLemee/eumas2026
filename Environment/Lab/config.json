@@ -1,0 +1,4 @@
+{"url": "http://localhost:1880/was/rl/",
+"control_url": "http://localhost:8081/control",
+"annotations_url": "http://localhost:8081/annotations/"
+}

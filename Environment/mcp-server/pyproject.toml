@@ -1,0 +1,12 @@
+[project]
+name = "mcp-server"
+version = "0.1.0"
+description = "An MCP server to interact with the Interaction Platform and the user"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastmcp>=3.2.4",
+    "flask>=3.1.3",
+    "rdflib>=7.6.0",
+    "requests>=2.34.0",
+]

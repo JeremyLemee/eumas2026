@@ -1,0 +1,24 @@
+/*
+    JaCaMo Application File Template
+    --------------------------------
+
+    This file defines the initial state of the MAS (initial agents, environment, organisation, ....)
+
+    (see jacamo/doc/jcm.html for more information about what can be defined in this file)
+
+    JaCaMo 1.2
+*/
+
+mas main {
+
+    agent lab_agent: lab_agent.asl {
+      join: w
+      focus: w.intart
+    }
+
+// --- Environment (workspaces & artifacts) ---
+workspace w {
+   artifact intart: interaction.InteractionArtifact()
+   }
+
+}
