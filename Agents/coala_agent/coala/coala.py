@@ -259,7 +259,7 @@ class Coala:
             print("is decision AI message")
             ai_message: AIMessage = decision
             self._accumulate_usage(ai_message)
-            decision_str = decision.text()
+            decision_str = decision.text
         print(f"Decision made: {decision_str}")
         self._record_decision(decision_str)
         return self.extract_reply(decision_str)
@@ -297,7 +297,7 @@ class Coala:
             print("is think AI message")
             ai_message: AIMessage = thought
             self._accumulate_usage(ai_message)
-            thought_str = thought.text()
+            thought_str = thought.text
 
         self.working_memory.chat_memory.add_ai_message(thought_str)
         print(f"Thought made: {thought}")

@@ -7,6 +7,7 @@ from rdflib.collection import Collection
 
 from components.annotation import Annotation
 from components.profile import Profile
+from components.selection import Selection
 from annotation_creation import add_text_action, create_llm_annotation
 from ontologies import BDIOnt, HMAS, LabOnt, LLMOnt, SoarOnt
 from registries.profile_registry import ProfileRegistry
@@ -652,6 +653,37 @@ def test_llm_goal_to_bdi_transformation_normalizes_copied_creator_uri(monkeypatc
     assert transformed.model.value(transformed.url, HMAS.hasCreator) == URIRef(
         "http://localhost:8991/profile#agent"
     )
+
+
+def test_selection_filters_annotations_created_by_target_profile():
+    profile = Profile(URIRef("http://localhost:8991/profile#agent"), Graph())
+    profile.add_ability(BDIOnt.set_env)
+
+    own_annotation = Annotation(URIRef("http://example.org/annotations/own"), Graph())
+    own_annotation.add_ability(BDIOnt.set_env)
+    own_annotation.add_triple(
+        own_annotation.url,
+        HMAS.hasCreator,
+        URIRef("http://localhost:8991/profile#agent"),
+    )
+
+    external_annotation = Annotation(URIRef("http://example.org/annotations/external"), Graph())
+    external_annotation.add_ability(BDIOnt.set_env)
+    external_annotation.add_triple(
+        external_annotation.url,
+        HMAS.HMAS.hasCreatorId,
+        URIRef("http://localhost:8992/profile#agent"),
+    )
+
+    selected = Selection(None, None, None).find(
+        profile,
+        Graph(),
+        {own_annotation, external_annotation},
+        [],
+        [],
+    )
+
+    assert selected == {external_annotation}
 
 
 def test_state_to_soar_light_processing_transformation_accepts_float_encoded_state_values():

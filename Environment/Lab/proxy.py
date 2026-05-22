@@ -121,7 +121,20 @@ def _snapshot_with_statuses(snapshot: dict, statuses: dict | None = None) -> dic
             "B2Status": status_snapshot["B2"],
         }
     )
+    _normalize_disabled_device_states(enriched)
     return enriched
+
+
+def _normalize_disabled_device_states(snapshot: dict) -> None:
+    """Disabled devices are always represented as off in the KG snapshot."""
+    if not snapshot.get("L1Status", True):
+        snapshot["Z1Light"] = False
+    if not snapshot.get("L2Status", True):
+        snapshot["Z2Light"] = False
+    if not snapshot.get("B1Status", True):
+        snapshot["Z1Blinds"] = False
+    if not snapshot.get("B2Status", True):
+        snapshot["Z2Blinds"] = False
 
 
 def _add_state_triples(kg: Graph, node, snapshot: dict) -> None:
@@ -136,6 +149,50 @@ def _add_state_triples(kg: Graph, node, snapshot: dict) -> None:
     kg.add((node, LabOnt.L2Status, Literal(snapshot.get("L2Status", True))))
     kg.add((node, LabOnt.B1Status, Literal(snapshot.get("B1Status", True))))
     kg.add((node, LabOnt.B2Status, Literal(snapshot.get("B2Status", True))))
+
+
+def _add_http_procedure(
+    kg: Graph,
+    env,
+    state,
+    label: str,
+    request_uri: str,
+    payload: dict,
+    preconditions: list[tuple[URIRef, bool]],
+    postconditions: list[tuple[URIRef, bool]],
+) -> None:
+    proc = BNode()
+    op = BNode()
+    pre = BNode()
+    post = BNode()
+
+    kg.add((env, HMAS.hasProcedure, proc))
+    kg.add((proc, RDF.type, HMAS.ActionSpecification))
+    kg.add((proc, SCHEMA.name, Literal(label)))
+    kg.add((proc, HMAS.hasOperation, op))
+    kg.add((proc, HMAS.hasPrecondition, pre))
+    kg.add((proc, HMAS.hasPostcondition, post))
+
+    kg.add((pre, RDF.type, SH.NodeShape))
+    kg.add((pre, SH.targetNode, state))
+    for predicate, expected_value in preconditions:
+        prop_shape = BNode()
+        kg.add((pre, SH.property, prop_shape))
+        kg.add((prop_shape, SH.path, predicate))
+        kg.add((prop_shape, SH.hasValue, Literal(expected_value)))
+
+    kg.add((post, RDF.type, SH.NodeShape))
+    kg.add((post, SH.targetNode, state))
+    for predicate, expected_value in postconditions:
+        prop_shape = BNode()
+        kg.add((post, SH.property, prop_shape))
+        kg.add((prop_shape, SH.path, predicate))
+        kg.add((prop_shape, SH.hasValue, Literal(expected_value)))
+
+    kg.add((op, RDF.type, HTTP.Request))
+    kg.add((op, HTTP.methodName, Literal("POST")))
+    kg.add((op, HTTP.requestURI, URIRef(request_uri)))
+    kg.add((op, HTTP.body, Literal(json.dumps(payload))))
 
 
 def _build_env_kg() -> Graph:
@@ -206,6 +263,23 @@ def _invoke_upstream_action(payload: dict) -> requests.Response:
 def _device_action_payload(device: str, value: bool) -> dict:
     return {device: value}
 
+
+def _device_to_upstream_field(device: str) -> str | None:
+    mapping = {
+        "L1": "Z1Light",
+        "L2": "Z2Light",
+        "B1": "Z1Blinds",
+        "B2": "Z2Blinds",
+    }
+    return mapping.get(device)
+
+
+def _device_is_active(snapshot: dict, device: str) -> bool:
+    upstream_field = _device_to_upstream_field(device)
+    if upstream_field is None:
+        return False
+    return bool(snapshot.get(upstream_field, False))
+
 # === Recurrent Policy Management ===
 _profile_recheck_state = {}
 _recurrent_policy_thread_started = False
@@ -246,24 +320,29 @@ def control():
     if not isinstance(activate, bool) or device not in device_enabled:
         return Response("The request is not valid", 400)
 
-    payload = _device_action_payload(device, activate)
-    device_enabled[device] = activate
-
-    response = requests.post(
-        f"{_local_base_url()}/action",
-        headers={"Content-Type": "application/json"},
-        json=payload,
-    )
-
-    if response.status_code == 200:
+    if activate:
+        device_enabled[device] = True
         return Response(
             f"The request was executed successfully for device {device} and activate status: {activate}",
             200,
         )
 
+    if _device_is_active(_read_remote_state(), device):
+        upstream_field = _device_to_upstream_field(device)
+        if upstream_field is None:
+            return Response("The request is not valid", 400)
+
+        response = _invoke_upstream_action(_device_action_payload(upstream_field, False))
+        if response.status_code != 200:
+            return Response(
+                f"An error occurred with status code: {response.status_code} and reason: {response.text}",
+                400,
+            )
+
+    device_enabled[device] = False
     return Response(
-        f"An error occurred with status code: {response.status_code} and reason: {response.text}",
-        400,
+        f"The request was executed successfully for device {device} and activate status: {activate}",
+        200,
     )
 
 
@@ -298,16 +377,14 @@ def action():
     if key not in ["L1", "L2", "B1", "B2"] or not isinstance(value, bool):
         return Response("The request is not valid", 400)
 
-    if key == "L1":
-        payload = {"Z1Light": value}
-    elif key == "L2":
-        payload = {"Z2Light": value}
-    elif key == "B1":
-        payload = {"Z1Blinds": value}
-    elif key == "B2":
-        payload = {"Z2Blinds": value}
-    else:
+    upstream_field = _device_to_upstream_field(key)
+    if upstream_field is None:
         return Response("The request is not valid", 400)
+
+    if not device_enabled.get(key, True):
+        return Response(f"Device {key} is disabled and cannot be changed", 409)
+
+    payload = {upstream_field: value}
 
     r = _invoke_upstream_action(payload)
 
@@ -418,51 +495,53 @@ def get_kg():
         _add_state_triples(kg, state, values)
 
         action_url = _local_action_url()
-        def add_procedure(device_label, state_prop, status_prop, expected_state, payload):
-            proc = BNode()
-            op = BNode()
-            pre = BNode()
-            post = BNode()
-            pre_state_prop = BNode()
-            pre_status_prop = BNode()
-            post_prop = BNode()
+        control_url = _local_control_url()
 
-            kg.add((env, HMAS.hasProcedure, proc))
-            kg.add((proc, RDF.type, HMAS.ActionSpecification))
-            kg.add((proc, SCHEMA.name, Literal(device_label)))
-            kg.add((proc, HMAS.hasOperation, op))
-            kg.add((proc, HMAS.hasPrecondition, pre))
-            kg.add((proc, HMAS.hasPostcondition, post))
+        def add_action_procedure(device_label, state_prop, status_prop, expected_state, payload):
+            _add_http_procedure(
+                kg=kg,
+                env=env,
+                state=state,
+                label=device_label,
+                request_uri=action_url,
+                payload=payload,
+                preconditions=[
+                    (state_prop, not expected_state),
+                    (status_prop, True),
+                ],
+                postconditions=[(state_prop, expected_state)],
+            )
 
-            kg.add((pre, RDF.type, SH.NodeShape))
-            kg.add((pre, SH.targetNode, state))
-            kg.add((pre, SH.property, pre_state_prop))
-            kg.add((pre_state_prop, SH.path, state_prop))
-            kg.add((pre_state_prop, SH.hasValue, Literal(not expected_state)))
-            kg.add((pre, SH.property, pre_status_prop))
-            kg.add((pre_status_prop, SH.path, status_prop))
-            kg.add((pre_status_prop, SH.hasValue, Literal(True)))
+        def add_control_procedure(device_label, status_prop, expected_status, device):
+            _add_http_procedure(
+                kg=kg,
+                env=env,
+                state=state,
+                label=device_label,
+                request_uri=control_url,
+                payload={"device": device, "activate": expected_status},
+                preconditions=[(status_prop, not expected_status)],
+                postconditions=[(status_prop, expected_status)],
+            )
 
-            kg.add((post, RDF.type, SH.NodeShape))
-            kg.add((post, SH.targetNode, state))
-            kg.add((post, SH.property, post_prop))
-            kg.add((post_prop, SH.path, state_prop))
-            kg.add((post_prop, SH.hasValue, Literal(expected_state)))
+        add_action_procedure("Turn on L1", LabOnt.hasZ1Light, LabOnt.L1Status, True, {"L1": True})
+        add_action_procedure("Turn off L1", LabOnt.hasZ1Light, LabOnt.L1Status, False, {"L1": False})
+        add_action_procedure("Turn on L2", LabOnt.hasZ2Light, LabOnt.L2Status, True, {"L2": True})
+        add_action_procedure("Turn off L2", LabOnt.hasZ2Light, LabOnt.L2Status, False, {"L2": False})
 
-            kg.add((op, RDF.type, HTTP.Request))
-            kg.add((op, HTTP.methodName, Literal("POST")))
-            kg.add((op, HTTP.requestURI, URIRef(action_url)))
-            kg.add((op, HTTP.body, Literal(json.dumps(payload))))
+        add_action_procedure("Open B1", LabOnt.hasZ1Blinds, LabOnt.B1Status, True, {"B1": True})
+        add_action_procedure("Close B1", LabOnt.hasZ1Blinds, LabOnt.B1Status, False, {"B1": False})
+        add_action_procedure("Open B2", LabOnt.hasZ2Blinds, LabOnt.B2Status, True, {"B2": True})
+        add_action_procedure("Close B2", LabOnt.hasZ2Blinds, LabOnt.B2Status, False, {"B2": False})
 
-        add_procedure("Turn on L1", LabOnt.hasZ1Light, LabOnt.L1Status, True, {"L1": True})
-        add_procedure("Turn off L1", LabOnt.hasZ1Light, LabOnt.L1Status, False, {"L1": False})
-        add_procedure("Turn on L2", LabOnt.hasZ2Light, LabOnt.L2Status, True, {"L2": True})
-        add_procedure("Turn off L2", LabOnt.hasZ2Light, LabOnt.L2Status, False, {"L2": False})
-
-        add_procedure("Open B1", LabOnt.hasZ1Blinds, LabOnt.B1Status, True, {"B1": True})
-        add_procedure("Close B1", LabOnt.hasZ1Blinds, LabOnt.B1Status, False, {"B1": False})
-        add_procedure("Open B2", LabOnt.hasZ2Blinds, LabOnt.B2Status, True, {"B2": True})
-        add_procedure("Close B2", LabOnt.hasZ2Blinds, LabOnt.B2Status, False, {"B2": False})
+        add_control_procedure("Enable L1", LabOnt.L1Status, True, "L1")
+        add_control_procedure("Disable L1", LabOnt.L1Status, False, "L1")
+        add_control_procedure("Enable L2", LabOnt.L2Status, True, "L2")
+        add_control_procedure("Disable L2", LabOnt.L2Status, False, "L2")
+        add_control_procedure("Enable B1", LabOnt.B1Status, True, "B1")
+        add_control_procedure("Disable B1", LabOnt.B1Status, False, "B1")
+        add_control_procedure("Enable B2", LabOnt.B2Status, True, "B2")
+        add_control_procedure("Disable B2", LabOnt.B2Status, False, "B2")
 
         return Response(kg.serialize(format="turtle"), mimetype="text/turtle")
 

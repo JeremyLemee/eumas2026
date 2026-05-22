@@ -31,7 +31,7 @@ _PROFILE_HOST = "127.0.0.1"
 _CALLBACK_PORT = 8086
 _PUBLIC_BASE_URL = "http://localhost:8991"
 _CALLBACK_BASE_URL = "http://localhost:8086"
-_IGNORED_CREATOR_PROFILE_URL = "http://localhost:8993/profile"
+_IGNORED_CREATOR_PROFILE_URL = "http://localhost:8991/profile#agent"
 _PROFILE_PATH = "/profile"
 _PERCEPTS_PATH = "/percepts"
 _ANNOTATION_PATH = "/annotation"
@@ -673,6 +673,7 @@ Rules:
 - First register your own profile with the Setup 4 application.
 - The message from the HTTP GUI must be read with read_message.
 - The message must be published as a natural-language annotation with add_natural_language_annotation.
+- Add "Callback URL: http://localhost:8991/profile#agent." to each user goal used to create the annotation.
 - When waiting for a reply, use the internal wait tool and inspect the observation context for lines starting with "Observed external message".
 - Only an external callback message can trigger send_user_message.
 - When replying to the user, formulate the perceived external message into one proper English sentence that preserves its meaning.
@@ -691,7 +692,7 @@ Workflow:
    - Set permanent memory field "current_state" to "create_annotation".
 4. When current_state is "create_annotation":
    - Call add_natural_language_annotation with:
-     - annotation: the exact value stored in permanent memory field "source_message"
+     - annotation: the exact value stored in permanent memory field "source_message" plus " Callback URL: http://localhost:8991/profile#agent."
    - Set permanent memory field "current_state" to "wait_for_reply".
 5. When current_state is "wait_for_reply":
    - Call the internal wait tool with:

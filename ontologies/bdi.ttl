@@ -14,7 +14,9 @@
 
 ###  http://example.org/bdi#hasStatement
 :hasStatement rdf:type owl:ObjectProperty ;
-              rdfs:subPropertyOf owl:topObjectProperty .
+              rdfs:subPropertyOf owl:topObjectProperty ;
+              rdfs:range :Literal ;
+              rdfs:comment "A link to a statement, represented has a literal." .
 
 
 ###  http://example.org/bdi#hasValues
@@ -51,12 +53,14 @@
 
 ###  http://example.org/bdi#disable_z1_blinds
 :disable_z1_blinds rdf:type owl:Class ;
-                   rdfs:subClassOf <https://purl.org/hmas/Goal> .
+                   rdfs:subClassOf <https://purl.org/hmas/Goal> ;
+                   rdfs:comment "The goal to disable the blinds in zone 1." .
 
 
 ###  http://example.org/bdi#disable_z2_blinds
 :disable_z2_blinds rdf:type owl:Class ;
-                   rdfs:subClassOf <https://purl.org/hmas/Goal> .
+                   rdfs:subClassOf <https://purl.org/hmas/Goal> ;
+                   rdfs:comment "The goal to disable the blinds in zone 2." .
 
 
 ###  http://example.org/bdi#predicate_ability

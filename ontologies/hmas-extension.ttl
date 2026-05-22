@@ -12,100 +12,110 @@
 #    Object Properties
 #################################################################
 
-###  https://purl.org/hmas/hasSituation
-:hasSituation rdf:type owl:ObjectProperty ;
-              rdfs:subPropertyOf owl:topObjectProperty ;
-              rdfs:domain :Agent ;
-              rdfs:range :Situation .
-
-
 ###  https://purl.org/hmas//conveys
 :conveys rdf:type owl:ObjectProperty ;
          rdfs:subPropertyOf owl:topObjectProperty ;
          rdfs:domain :Information ;
-         rdfs:range :Content .
+         rdfs:comment "Provides the content conveyed by information." .
 
 
 ###  https://purl.org/hmas//hasCallbackUrl
 :hasCallbackUrl rdf:type owl:ObjectProperty ;
                 rdfs:subPropertyOf owl:topObjectProperty ;
-                rdfs:domain :RecurrentPolicy .
+                rdfs:domain :RecurrentPolicy ;
+                rdfs:comment "Indicates the callback URL to send annotations to an agent." .
 
 
 ###  https://purl.org/hmas//hasCreatorId
 :hasCreatorId rdf:type owl:ObjectProperty ;
               rdfs:subPropertyOf owl:topObjectProperty ;
               rdfs:domain :Annotation ;
-              rdfs:range :Agent .
+              rdfs:range :Agent ;
+              rdfs:comment "A link to the agent creating an annotation." .
 
 
 ###  https://purl.org/hmas//hasGoal
 :hasGoal rdf:type owl:ObjectProperty ;
          rdfs:subPropertyOf owl:topObjectProperty ;
          rdfs:domain :Agent ;
-         rdfs:range :Goal .
+         rdfs:range :Goal ;
+         rdfs:comment "A link to the agent's goal." .
 
 
 ###  https://purl.org/hmas//hasInteractionPolicy
 :hasInteractionPolicy rdf:type owl:ObjectProperty ;
                       rdfs:subPropertyOf owl:topObjectProperty ;
                       rdfs:domain :Agent ;
-                      rdfs:range :InteractionPolicy .
+                      rdfs:range :InteractionPolicy ;
+                      rdfs:comment "A link to an interaction policy that an agent has." .
 
 
 ###  https://purl.org/hmas//hasMessageUrl
 :hasMessageUrl rdf:type owl:ObjectProperty ;
                rdfs:subPropertyOf owl:topObjectProperty ;
-               rdfs:domain :MessagePolicy .
+               rdfs:domain :MessagePolicy ;
+               rdfs:comment "A link to an URL to send messages to an agent." .
 
 
 ###  https://purl.org/hmas//hasOperation
 :hasOperation rdf:type owl:ObjectProperty ;
               rdfs:subPropertyOf owl:topObjectProperty ;
               rdfs:domain :Procedure ;
-              rdfs:range :Operation .
+              rdfs:range :Operation ;
+              rdfs:comment "A link to the operation described by a procedure." .
 
 
 ###  https://purl.org/hmas//hasPostcondition
 :hasPostcondition rdf:type owl:ObjectProperty ;
                   rdfs:subPropertyOf owl:topObjectProperty ;
                   rdfs:domain :Procedure ;
-                  rdfs:range :Condition .
+                  rdfs:comment "A link to the postcondition of a procedure (e.g., the result of performing the operation described by the procedure)." .
 
 
 ###  https://purl.org/hmas//hasPrecondition
 :hasPrecondition rdf:type owl:ObjectProperty ;
                  rdfs:subPropertyOf owl:topObjectProperty ;
                  rdfs:domain :Procedure ;
-                 rdfs:range :Condition .
+                 rdfs:comment "A link to the precondition of a procedure (e.g., the condition required to perform the operation described by the procedure)." .
 
 
 ###  https://purl.org/hmas//hasProcedure
 :hasProcedure rdf:type owl:ObjectProperty ;
               rdfs:subPropertyOf owl:topObjectProperty ;
               rdfs:domain :Artifact ;
-              rdfs:range :Procedure .
+              rdfs:range :Procedure ;
+              rdfs:comment "A link to a procedure that an artifact enables." .
 
 
 ###  https://purl.org/hmas//hasReceiver
 :hasReceiver rdf:type owl:ObjectProperty ;
              rdfs:subPropertyOf owl:topObjectProperty ;
              rdfs:domain :Message ;
-             rdfs:range :Agent .
+             rdfs:range :Agent ;
+             rdfs:comment "A link to an agent meant to receive a message" .
 
 
 ###  https://purl.org/hmas//hasSender
 :hasSender rdf:type owl:ObjectProperty ;
            rdfs:subPropertyOf owl:topObjectProperty ;
            rdfs:domain :Message ;
-           rdfs:range :Agent .
+           rdfs:range :Agent ;
+           rdfs:comment "A link to the agent sending a message." .
+
+
+###  https://purl.org/hmas//hasSituation
+:hasSituation rdf:type owl:ObjectProperty ;
+              rdfs:subPropertyOf owl:topObjectProperty ;
+              rdfs:domain :Agent ;
+              rdfs:comment "The situation of an agent." .
 
 
 ###  https://purl.org/hmas//hasState
 :hasState rdf:type owl:ObjectProperty ;
           rdfs:subPropertyOf owl:topObjectProperty ;
           rdfs:domain :Artifact ;
-          rdfs:range :State .
+          rdfs:range :State ;
+          rdfs:comment "A link to the state of an artifact." .
 
 
 ###  https://purl.org/hmas//recommendsAbility
@@ -118,8 +128,7 @@
 ###  https://purl.org/hmas//recommendsContext
 :recommendsContext rdf:type owl:ObjectProperty ;
                    rdfs:subPropertyOf owl:topObjectProperty ;
-                   rdfs:domain :Annotation ;
-                   rdfs:range :Condition .
+                   rdfs:domain :Annotation .
 
 
 ###  https://purl.org/hmas//signifies
@@ -130,19 +139,28 @@
 
 
 #################################################################
+#    Data properties
+#################################################################
+
+###  http://www.w3.org/2002/07/owl#topDataProperty
+owl:topDataProperty rdfs:domain :Information ;
+                    rdfs:range xsd:string .
+
+
+###  https://purl.org/hmas//hasId
+:hasId rdf:type owl:DatatypeProperty ;
+       rdfs:subPropertyOf owl:topDataProperty ;
+       rdfs:domain :Information ;
+       rdfs:comment "A link to an identifier for some information." .
+
+
+#################################################################
 #    Classes
 #################################################################
 
-###  https://purl.org/hmas/Content
-:Content rdf:type owl:Class .
-
-
-###  https://purl.org/hmas/Situation
-:Situation rdf:type owl:Class .
-
-
 ###  https://purl.org/hmas//Ability
-:Ability rdf:type owl:Class .
+:Ability rdf:type owl:Class ;
+         rdfs:comment "An ability possessed by an agent." .
 
 
 ###  https://purl.org/hmas//Agent
@@ -162,20 +180,19 @@
 :BehaviorExecution rdf:type owl:Class .
 
 
-###  https://purl.org/hmas//Condition
-:Condition rdf:type owl:Class .
-
-
 ###  https://purl.org/hmas//Goal
-:Goal rdf:type owl:Class .
+:Goal rdf:type owl:Class ;
+      rdfs:comment "A goal of an agent." .
 
 
 ###  https://purl.org/hmas//Information
-:Information rdf:type owl:Class .
+:Information rdf:type owl:Class ;
+             rdfs:comment "A general class for information conveyed to agents" .
 
 
 ###  https://purl.org/hmas//InteractionPolicy
-:InteractionPolicy rdf:type owl:Class .
+:InteractionPolicy rdf:type owl:Class ;
+                   rdfs:comment "A policy indicating how the agent can be interacted with and for what purpose." .
 
 
 ###  https://purl.org/hmas//Message
@@ -189,11 +206,13 @@
 
 
 ###  https://purl.org/hmas//Operation
-:Operation rdf:type owl:Class .
+:Operation rdf:type owl:Class ;
+           rdfs:comment "An operation that can be performed in the environment." .
 
 
 ###  https://purl.org/hmas//Procedure
-:Procedure rdf:type owl:Class .
+:Procedure rdf:type owl:Class ;
+           rdfs:comment "An operation that can be performed in the environment, associated with preconditions and postconditions." .
 
 
 ###  https://purl.org/hmas//RecurrentPolicy
@@ -211,7 +230,8 @@
 
 
 ###  https://purl.org/hmas//State
-:State rdf:type owl:Class .
+:State rdf:type owl:Class ;
+       rdfs:comment "The state of an artifact" .
 
 
 ###  Generated by the OWL API (version 4.5.29.2024-05-13T12:11:03Z) https://github.com/owlcs/owlapi

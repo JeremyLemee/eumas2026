@@ -36,10 +36,7 @@ CREATOR_PROFILE_URL = os.environ.get(
 PROFILE_REGISTRATION_NAME = os.environ.get(
     "SETUP_PROFILE_REGISTRATION_NAME", "coala_profile"
 )
-DEFAULT_GUI_MESSAGE = (
-    "Zone 1 should have light level 1. Zone 2 light level 2. "
-    f"Callback URL: {CREATOR_PROFILE_URL}."
-)
+DEFAULT_GUI_MESSAGE = "Zone 1 should have light level 1. Zone 2 light level 2."
 REQUEST_TIMEOUT = 10
 LOG_FILE = Path(__file__).resolve().parent / "setup_tools_log.txt"
 

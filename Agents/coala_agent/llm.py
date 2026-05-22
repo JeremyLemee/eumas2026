@@ -3,11 +3,24 @@ from pathlib import Path
 from typing import Any
 
 from langchain.chat_models import BaseChatModel
-
+from langchain_openai.data._profiles import _PROFILES as OPENAI_MODEL_PROFILES
 from langchain_openai import ChatOpenAI
 
 from langchain_ollama import ChatOllama
 from pydantic import SecretStr
+
+
+def _normalize_openai_model_name(name: str) -> str:
+    return name.strip().lower().replace(".", "-")
+
+
+def _openai_model_supports_reasoning(name: str) -> bool:
+    normalized_name = _normalize_openai_model_name(name)
+    profile = OPENAI_MODEL_PROFILES.get(normalized_name)
+    if profile is not None:
+        return bool(profile.get("reasoning_output"))
+
+    return normalized_name.startswith(("o1", "o3", "o4", "gpt-5"))
 
 
 def load_llm(
@@ -23,6 +36,9 @@ def load_llm(
 
     provider_key = provider.lower()
     if provider_key == "openai":
+        if reasoning is False and _openai_model_supports_reasoning(name):
+            model_kwargs["reasoning"] = {"effort": "none"}
+
         if os.getenv("OPENAI_API_KEY"):
             return ChatOpenAI(model=name, **model_kwargs)
         key_path = Path(__file__).resolve().parent / "API_KEY.txt"

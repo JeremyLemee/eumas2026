@@ -1,14 +1,11 @@
 {
-  "ldscriptserver": {
-    "url": "http://172.28.0.16:8080/function"
-  },
   "lab":{
     "env-url": "http://172.28.0.12:8081/kg"
   },
   "annotations_url": "http://localhost:5001/annotations/",
   "transformation_llm": {
     "provider": "ollama",
-    "model": "gemma4:e2b",
+    "model": "gemma4:26b",
     "thinking": false
   }
 }

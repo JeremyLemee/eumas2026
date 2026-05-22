@@ -16,24 +16,28 @@
 ###  http://example.org/lab#B1Status
 :B1Status rdf:type owl:DatatypeProperty ;
           rdfs:subPropertyOf owl:topDataProperty ;
+          rdfs:range xsd:boolean ;
           rdfs:comment "A boolean indicating whether the blinds in zone 1 are enabled or disabled." .
 
 
 ###  http://example.org/lab#B2Status
 :B2Status rdf:type owl:DatatypeProperty ;
           rdfs:subPropertyOf owl:topDataProperty ;
+          rdfs:range xsd:boolean ;
           rdfs:comment "A boolean indicating whether the blinds in zone 2 are enabled or disabled." .
 
 
 ###  http://example.org/lab#L1Status
 :L1Status rdf:type owl:DatatypeProperty ;
           rdfs:subPropertyOf owl:topDataProperty ;
+          rdfs:range xsd:boolean ;
           rdfs:comment "A boolean indicating whether the lights in zone 1 are enabled or disabled." .
 
 
 ###  http://example.org/lab#L2Status
 :L2Status rdf:type owl:DatatypeProperty ;
           rdfs:subPropertyOf owl:topDataProperty ;
+          rdfs:range xsd:boolean ;
           rdfs:comment "A boolean indicating whether the lights in zone 2 are enabled or disabled." .
 
 
@@ -51,32 +55,40 @@
 
 ###  http://example.org/lab#hasZ1Blinds
 :hasZ1Blinds rdf:type owl:DatatypeProperty ;
-             rdfs:subPropertyOf owl:topDataProperty .
+             rdfs:subPropertyOf owl:topDataProperty ;
+             rdfs:comment "Whether the blinds in Z1 are up or down." .
 
 
 ###  http://example.org/lab#hasZ1Level
 :hasZ1Level rdf:type owl:DatatypeProperty ;
-            rdfs:subPropertyOf owl:topDataProperty .
+            rdfs:subPropertyOf owl:topDataProperty ;
+            rdfs:comment "The light level in zone 1." .
 
 
 ###  http://example.org/lab#hasZ1Light
 :hasZ1Light rdf:type owl:DatatypeProperty ;
-            rdfs:subPropertyOf owl:topDataProperty .
+            rdfs:subPropertyOf owl:topDataProperty ;
+            rdfs:comment "Whether the light is zone 1 is on or off." .
 
 
 ###  http://example.org/lab#hasZ2Blinds
 :hasZ2Blinds rdf:type owl:DatatypeProperty ;
-             rdfs:subPropertyOf owl:topDataProperty .
+             rdfs:subPropertyOf owl:topDataProperty ;
+             rdfs:range xsd:boolean ;
+             rdfs:comment "Whether the blinds in zone 2 are up or down." .
 
 
 ###  http://example.org/lab#hasZ2Level
 :hasZ2Level rdf:type owl:DatatypeProperty ;
-            rdfs:subPropertyOf owl:topDataProperty .
+            rdfs:subPropertyOf owl:topDataProperty ;
+            rdfs:comment "The light level in zone 2." .
 
 
 ###  http://example.org/lab#hasZ2Light
 :hasZ2Light rdf:type owl:DatatypeProperty ;
-            rdfs:subPropertyOf owl:topDataProperty .
+            rdfs:subPropertyOf owl:topDataProperty ;
+            rdfs:range xsd:boolean ;
+            rdfs:comment "Whether the light in zone 2 is on or off." .
 
 
 #################################################################

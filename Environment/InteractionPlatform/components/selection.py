@@ -1,4 +1,4 @@
-from rdflib import RDF, URIRef
+from rdflib import URIRef
 
 from components.annotation import Annotation
 from environment import Environment
@@ -57,11 +57,12 @@ class Selection:
         print("initial generations: ", generations)
         print("generations: ", generations)
         annotations.update(self.generate_annotations(profile, environment_kg, generations))
-        l = list(annotations)
-        for a in l:
+        annotations = self.filter_self_created(profile, annotations)
+        annotation_list = list(annotations)
+        for a in annotation_list:
             for t in transformations:
                 annotation_t = t(profile, a)
-                if annotation_t is not None:
+                if annotation_t is not None and not self.is_self_created(profile, annotation_t):
                     print("annotation found")
                     annotations.add(annotation_t)
                     break
@@ -72,6 +73,18 @@ class Selection:
         annotations = self.filter_ag_env(profile, annotations)
         print("final number of annotations: ", len(annotations))
         return annotations
+
+    def is_self_created(self, profile: Profile, annotation: Annotation) -> bool:
+        profile_id = str(profile.id)
+        creator_predicates = (HMAS.hasCreator, HMAS.HMAS.hasCreatorId)
+        for predicate in creator_predicates:
+            for creator in annotation.model.objects(annotation.url, predicate):
+                if str(creator) == profile_id:
+                    return True
+        return False
+
+    def filter_self_created(self, profile: Profile, annotations: set):
+        return {a for a in annotations if not self.is_self_created(profile, a)}
 
     def filter_env(self, env_state, annotations: set):
         def _conforms(s):

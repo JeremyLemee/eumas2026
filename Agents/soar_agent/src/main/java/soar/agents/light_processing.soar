@@ -30,6 +30,8 @@ chunk on
 # 10. Confirm the pending action once its postcondition appears.
 # 11. Refresh again after confirmation before planning the next action.
 # 12. Complete the goal once the discretized state matches the goal.
+# 13. If the goal remains impossible, keep refreshing/retrying until the
+#     iteration limit is reached, then send done=false.
 #
 # Important fixes:
 # - No self-negating elaboration rules for z1d/z2d.
@@ -38,6 +40,14 @@ chunk on
 #   not continue planning from a possibly stale percept object.
 # - Candidate action proposals are disabled while ^needs-refresh true exists.
 # - Refresh removes stale percept readiness flags.
+# - Max-iteration failure now dominates all continuation operators, including
+#   KG actions, wait-for-feedback, clear-pending-disabled, and config reset.
+# - All-configs-tried no longer fails early. It resets the config-search marks
+#   and continues until the max-iteration failure rule fires. This lets the
+#   agent recover if disabled blinds become available again later.
+# - Disabled config abandon dominates normal config actions and normal abandon
+#   operators, avoiding preference cycles such as:
+#     disabled-abandon > config-action > normal-abandon > disabled-abandon.
 ###############################################################################
 
 ###############################################################################
@@ -64,7 +74,9 @@ sp {light-processing*apply*initialize
         ^td-url |http://localhost:5001/td|
         ^kg-url |http://localhost:8081/kg|
         ^headers |{}|
-        ^max-iterations 100)
+        ^max-iterations 100
+        ^settle-retries-max 5
+        ^no-progress-retries-max 5)
 }
 
 ###############################################################################
@@ -220,7 +232,8 @@ sp {light-processing*remove-old-iteration-on-begin
 
 sp {light-processing*apply*begin-goal-event
    (state <s> ^superstate nil
-              ^operator <o>)
+              ^operator <o>
+              ^no-progress-retries-max <no-progress-max>)
    (<o> ^name begin-goal-event
         ^event-id <e>
         ^goal-z1 <goal-z1>
@@ -241,10 +254,93 @@ sp {light-processing*apply*begin-goal-event
         ^goal-url <goal-url>
         ^processed-event <e>
         ^iteration 0
+        ^no-progress-retries-left <no-progress-max>
+        ^next-config-rank 0
         ^needs-refresh true)
 
    (<s> ^wait-toggle a -)
    (<s> ^wait-toggle b -)
+}
+
+sp {light-processing*cleanup-settle-retries-on-begin
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^settle-retries-left <retries>)
+   (<o> ^name begin-goal-event)
+-->
+   (<s> ^settle-retries-left <retries> -)
+}
+
+sp {light-processing*cleanup-no-progress-retries-on-begin
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^no-progress-retries-left <retries>)
+   (<o> ^name begin-goal-event)
+-->
+   (<s> ^no-progress-retries-left <retries> -)
+}
+
+sp {light-processing*cleanup-action-on-begin
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^action <old>)
+   (<o> ^name begin-goal-event)
+-->
+   (<s> ^action <old> -)
+}
+
+sp {light-processing*cleanup-config-on-begin
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^config <old>)
+   (<o> ^name begin-goal-event)
+-->
+   (<s> ^config <old> -)
+}
+
+sp {light-processing*cleanup-current-config-on-begin
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^current-config <old>)
+   (<o> ^name begin-goal-event)
+-->
+   (<s> ^current-config <old> -)
+}
+
+sp {light-processing*cleanup-config-search-loaded-on-begin
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^config-search-loaded true)
+   (<o> ^name begin-goal-event)
+-->
+   (<s> ^config-search-loaded true -)
+}
+
+sp {light-processing*cleanup-next-config-rank-on-begin
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^next-config-rank <old>)
+   (<o> ^name begin-goal-event)
+-->
+   (<s> ^next-config-rank <old> -)
+}
+
+sp {light-processing*cleanup-last-z1d-on-begin
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^last-z1d <old>)
+   (<o> ^name begin-goal-event)
+-->
+   (<s> ^last-z1d <old> -)
+}
+
+sp {light-processing*cleanup-last-z2d-on-begin
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^last-z2d <old>)
+   (<o> ^name begin-goal-event)
+-->
+   (<s> ^last-z2d <old> -)
 }
 
 ###############################################################################
@@ -325,8 +421,8 @@ sp {light-processing*prefer*fail-goal-over-action
    (<fail> ^name fail-goal)
    (<other> ^name perform-kg-action)
 -->
-   (print-action |[light-processing] PREFERENCE: KG action over fail-goal|)
-   (<s> ^operator <other> > <fail>)
+   (print-action |[light-processing] PREFERENCE: fail-goal over KG action|)
+   (<s> ^operator <fail> > <other>)
 }
 
 sp {light-processing*prefer*fail-goal-over-confirm
@@ -340,7 +436,29 @@ sp {light-processing*prefer*fail-goal-over-confirm
    (<s> ^operator <fail> > <other>)
 }
 
-sp {light-processing*prefer*fail-goal-over-wait-feedback
+sp {light-processing*prefer*fail-goal-over-wait-for-settle
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <other> +)
+   (<fail> ^name fail-goal)
+   (<other> ^name wait-for-settle)
+-->
+   (print-action |[light-processing] PREFERENCE: fail-goal over wait-for-settle|)
+   (<s> ^operator <fail> > <other>)
+}
+
+sp {light-processing*prefer*fail-goal-over-wait-for-quiescence
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <other> +)
+   (<fail> ^name fail-goal)
+   (<other> ^name wait-for-quiescence)
+-->
+   (print-action |[light-processing] PREFERENCE: fail-goal over wait-for-quiescence|)
+   (<s> ^operator <fail> > <other>)
+}
+
+sp {light-processing*prefer*fail-goal-over-wait-for-feedback
    (state <s> ^superstate nil
               ^operator <fail> +
               ^operator <other> +)
@@ -348,6 +466,61 @@ sp {light-processing*prefer*fail-goal-over-wait-feedback
    (<other> ^name wait-for-feedback)
 -->
    (print-action |[light-processing] PREFERENCE: fail-goal over wait-for-feedback|)
+   (<s> ^operator <fail> > <other>)
+}
+
+sp {light-processing*prefer*fail-goal-over-clear-pending-disabled
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <other> +)
+   (<fail> ^name fail-goal)
+   (<other> ^name clear-pending-disabled)
+-->
+   (print-action |[light-processing] PREFERENCE: fail-goal over clear-pending-disabled|)
+   (<s> ^operator <fail> > <other>)
+}
+
+sp {light-processing*prefer*fail-goal-over-select-config
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <other> +)
+   (<fail> ^name fail-goal)
+   (<other> ^name select-config)
+-->
+   (print-action |[light-processing] PREFERENCE: fail-goal over select-config|)
+   (<s> ^operator <fail> > <other>)
+}
+
+sp {light-processing*prefer*fail-goal-over-config-complete
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <other> +)
+   (<fail> ^name fail-goal)
+   (<other> ^name config-complete)
+-->
+   (print-action |[light-processing] PREFERENCE: fail-goal over config-complete|)
+   (<s> ^operator <fail> > <other>)
+}
+
+sp {light-processing*prefer*fail-goal-over-abandon-blocked-config
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <other> +)
+   (<fail> ^name fail-goal)
+   (<other> ^name abandon-blocked-config)
+-->
+   (print-action |[light-processing] PREFERENCE: fail-goal over abandon-blocked-config|)
+   (<s> ^operator <fail> > <other>)
+}
+
+sp {light-processing*prefer*fail-goal-over-reset-config-search
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <other> +)
+   (<fail> ^name fail-goal)
+   (<other> ^name reset-config-search)
+-->
+   (print-action |[light-processing] PREFERENCE: fail-goal over reset-config-search|)
    (<s> ^operator <fail> > <other>)
 }
 
@@ -463,6 +636,42 @@ sp {light-processing*cleanup-iteration-during-fail
    (<o> ^name fail-goal)
 -->
    (<s> ^iteration <iteration> -)
+}
+
+sp {light-processing*cleanup-settle-retries-during-fail
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^settle-retries-left <retries>)
+   (<o> ^name fail-goal)
+-->
+   (<s> ^settle-retries-left <retries> -)
+}
+
+sp {light-processing*cleanup-no-progress-retries-during-fail
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^no-progress-retries-left <retries>)
+   (<o> ^name fail-goal)
+-->
+   (<s> ^no-progress-retries-left <retries> -)
+}
+
+sp {light-processing*cleanup-last-z1d-during-fail
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^last-z1d <old>)
+   (<o> ^name fail-goal)
+-->
+   (<s> ^last-z1d <old> -)
+}
+
+sp {light-processing*cleanup-last-z2d-during-fail
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^last-z2d <old>)
+   (<o> ^name fail-goal)
+-->
+   (<s> ^last-z2d <old> -)
 }
 
 ###############################################################################
@@ -612,6 +821,23 @@ sp {light-processing*apply*load-action-model
          ^effect (kg-action-field <kg-url> |B2| false |effect|)
          ^control (kg-action-field <kg-url> |B2| false |control|))
 
+   (<c0> ^config-id c0 ^rank 0 ^l1 false ^l2 false ^b1 false ^b2 false)
+   (<c1> ^config-id c1 ^rank 1 ^l1 false ^l2 true  ^b1 false ^b2 false)
+   (<c2> ^config-id c2 ^rank 2 ^l1 false ^l2 true  ^b1 false ^b2 true)
+   (<c3> ^config-id c3 ^rank 3 ^l1 true  ^l2 true  ^b1 false ^b2 true)
+   (<c4> ^config-id c4 ^rank 4 ^l1 false ^l2 false ^b1 true  ^b2 true)
+   (<c5> ^config-id c5 ^rank 5 ^l1 true  ^l2 false ^b1 true  ^b2 true)
+   (<c6> ^config-id c6 ^rank 6 ^l1 true  ^l2 true  ^b1 true  ^b2 true)
+   (<c7> ^config-id c7 ^rank 7 ^l1 true  ^l2 false ^b1 false ^b2 false)
+   (<c8> ^config-id c8 ^rank 8 ^l1 false ^l2 false ^b1 true  ^b2 false)
+   (<c9> ^config-id c9 ^rank 9 ^l1 false ^l2 true  ^b1 true  ^b2 false)
+   (<c10> ^config-id c10 ^rank 10 ^l1 true  ^l2 true  ^b1 true  ^b2 false)
+   (<c11> ^config-id c11 ^rank 11 ^l1 true  ^l2 false ^b1 true  ^b2 false)
+   (<c12> ^config-id c12 ^rank 12 ^l1 false ^l2 false ^b1 false ^b2 true)
+   (<c13> ^config-id c13 ^rank 13 ^l1 true  ^l2 false ^b1 false ^b2 true)
+   (<c14> ^config-id c14 ^rank 14 ^l1 false ^l2 true  ^b1 true  ^b2 true)
+   (<c15> ^config-id c15 ^rank 15 ^l1 true  ^l2 true  ^b1 false ^b2 false)
+
    (<s> ^action <a1>
         ^action <a2>
         ^action <a3>
@@ -620,11 +846,46 @@ sp {light-processing*apply*load-action-model
         ^action <a6>
         ^action <a7>
         ^action <a8>
+        ^config <c0>
+        ^config <c1>
+        ^config <c2>
+        ^config <c3>
+        ^config <c4>
+        ^config <c5>
+        ^config <c6>
+        ^config <c7>
+        ^config <c8>
+        ^config <c9>
+        ^config <c10>
+        ^config <c11>
+        ^config <c12>
+        ^config <c13>
+        ^config <c14>
+        ^config <c15>
         ^action-model-loaded true
+        ^config-search-loaded true
         ^needs-refresh true)
 
    (<s> ^iteration <iteration> -)
    (<s> ^iteration (+ <iteration> 1))
+}
+
+sp {light-processing*clear-settle-retries-on-action
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^settle-retries-left <retries>)
+   (<o> ^name perform-kg-action)
+-->
+   (<s> ^settle-retries-left <retries> -)
+}
+
+sp {light-processing*clear-no-progress-retries-on-action
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^no-progress-retries-left <retries>)
+   (<o> ^name perform-kg-action)
+-->
+   (<s> ^no-progress-retries-left <retries> -)
 }
 
 ###############################################################################
@@ -720,6 +981,34 @@ sp {light-processing*normalize*control-blind-singular
    (<a> ^control blind)
 -->
    (<a> ^control-local blinds)
+}
+
+sp {light-processing*normalize*device-l1-status-local
+   (state <s> ^action <a>)
+   (<a> ^device L1)
+-->
+   (<a> ^status-local l1-status)
+}
+
+sp {light-processing*normalize*device-l2-status-local
+   (state <s> ^action <a>)
+   (<a> ^device L2)
+-->
+   (<a> ^status-local l2-status)
+}
+
+sp {light-processing*normalize*device-b1-status-local
+   (state <s> ^action <a>)
+   (<a> ^device B1)
+-->
+   (<a> ^status-local b1-status)
+}
+
+sp {light-processing*normalize*device-b2-status-local
+   (state <s> ^action <a>)
+   (<a> ^device B2)
+-->
+   (<a> ^status-local b2-status)
 }
 
 sp {light-processing*normalize*pre-z1level-local
@@ -1152,6 +1441,60 @@ sp {light-processing*apply*discretize-percepts
    (<s> ^raw-percepts-ready true -)
 }
 
+sp {light-processing*reset-no-progress-when-z1d-changes
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^percepts <p>
+              ^no-progress-retries-max <max>
+              ^last-z1d <old>)
+   (<o> ^name discretize-percepts)
+   (<p> ^z1d <new>)
+   (<new> <> <old>)
+-->
+   (print-action |[light-processing] RESET no-progress budget: z1d changed from | <old> | to | <new>)
+   (<s> ^no-progress-retries-left <max>
+        ^last-z1d <old> -
+        ^last-z1d <new>)
+}
+
+sp {light-processing*store-initial-z1d
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^percepts <p>)
+   (<o> ^name discretize-percepts)
+   (<p> ^z1d <new>)
+   -(<s> ^last-z1d <old>)
+-->
+   (<s> ^last-z1d <new>)
+}
+
+sp {light-processing*reset-no-progress-when-z2d-changes
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^percepts <p>
+              ^no-progress-retries-max <max>
+              ^last-z2d <old>)
+   (<o> ^name discretize-percepts)
+   (<p> ^z2d <new>)
+   (<new> <> <old>)
+-->
+   (print-action |[light-processing] RESET no-progress budget: z2d changed from | <old> | to | <new>)
+   (<s> ^no-progress-retries-left <max>
+        ^last-z2d <old> -
+        ^last-z2d <new>)
+}
+
+sp {light-processing*store-initial-z2d
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^percepts <p>)
+   (<o> ^name discretize-percepts)
+   (<p> ^z2d <new>)
+   -(<s> ^last-z2d <old>)
+-->
+   (<s> ^last-z2d <new>)
+}
+
 ###############################################################################
 # Goal completion
 ###############################################################################
@@ -1240,6 +1583,42 @@ sp {light-processing*cleanup-iteration-during-complete
    (<s> ^iteration <iteration> -)
 }
 
+sp {light-processing*cleanup-settle-retries-during-complete
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^settle-retries-left <retries>)
+   (<o> ^name complete-goal)
+-->
+   (<s> ^settle-retries-left <retries> -)
+}
+
+sp {light-processing*cleanup-no-progress-retries-during-complete
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^no-progress-retries-left <retries>)
+   (<o> ^name complete-goal)
+-->
+   (<s> ^no-progress-retries-left <retries> -)
+}
+
+sp {light-processing*cleanup-last-z1d-during-complete
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^last-z1d <old>)
+   (<o> ^name complete-goal)
+-->
+   (<s> ^last-z1d <old> -)
+}
+
+sp {light-processing*cleanup-last-z2d-during-complete
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^last-z2d <old>)
+   (<o> ^name complete-goal)
+-->
+   (<s> ^last-z2d <old> -)
+}
+
 ###############################################################################
 # Confirm pending action from KG-refreshed percepts
 #
@@ -1281,7 +1660,8 @@ sp {light-processing*prefer*confirm-pending
 
 sp {light-processing*apply*confirm-pending
    (state <s> ^superstate nil
-              ^operator <o>)
+              ^operator <o>
+              ^settle-retries-max <settle-max>)
    (<o> ^name confirm-pending
         ^device <device>
         ^activate <activate>
@@ -1294,6 +1674,247 @@ sp {light-processing*apply*confirm-pending
         ^pending-activate <activate> -
         ^pending-post-attribute <post-attribute> -
         ^pending-post-value <post-value> -
+        ^settle-retries-left <settle-max>
+        ^needs-refresh true)
+}
+
+###############################################################################
+# Allow light levels to settle after an actuator confirms before replanning or
+# failing. This prevents declaring no-applicable-action on stale light levels.
+###############################################################################
+
+sp {light-processing*propose*wait-for-settle
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^percepts <p>
+              ^percepts-ready true
+              ^settle-retries-left { <retries> > 0 }
+              -^pending-device <pd>
+              -^needs-refresh true)
+   { (<p> ^z1d { <z1d> <> <goal-z1> })
+     (<p> ^z2d { <z2d> <> <goal-z2> }) }
+-->
+   (print-action |[light-processing] PROPOSE wait-for-settle: remaining=| <retries>)
+   (<o> ^name wait-for-settle
+        ^remaining <retries>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*prefer*action-over-wait-for-settle
+   (state <s> ^superstate nil
+              ^operator <action> +
+              ^operator <settle> +)
+   (<action> ^name perform-kg-action)
+   (<settle> ^name wait-for-settle)
+-->
+   (print-action |[light-processing] PREFERENCE: perform-kg-action over wait-for-settle|)
+   (<s> ^operator <action> > <settle>)
+}
+
+sp {light-processing*prefer*wait-for-settle-over-select-config
+   (state <s> ^superstate nil
+              ^operator <cfg> +
+              ^operator <settle> +)
+   (<cfg> ^name select-config)
+   (<settle> ^name wait-for-settle)
+-->
+   (print-action |[light-processing] PREFERENCE: wait-for-settle over select-config|)
+   (<s> ^operator <settle> > <cfg>)
+}
+
+sp {light-processing*prefer*wait-for-settle-over-quiescence
+   (state <s> ^superstate nil
+              ^operator <settle> +
+              ^operator <wait> +)
+   (<settle> ^name wait-for-settle)
+   (<wait> ^name wait-for-quiescence)
+-->
+   (print-action |[light-processing] PREFERENCE: wait-for-settle over wait-for-quiescence|)
+   (<s> ^operator <settle> > <wait>)
+}
+
+sp {light-processing*prefer*wait-for-settle-over-config-complete
+   (state <s> ^superstate nil
+              ^operator <settle> +
+              ^operator <cfg> +)
+   (<settle> ^name wait-for-settle)
+   (<cfg> ^name config-complete)
+-->
+   (print-action |[light-processing] PREFERENCE: wait-for-settle over config-complete|)
+   (<s> ^operator <settle> > <cfg>)
+}
+
+sp {light-processing*apply*wait-for-settle
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^settle-retries-left <retries>)
+   (<o> ^name wait-for-settle
+        ^remaining <retries>)
+-->
+   (print-action |[light-processing] APPLY wait-for-settle: remaining=| <retries> |; waiting for light level to settle|)
+   (wait 200)
+   (<s> ^settle-retries-left <retries> -)
+   (<s> ^settle-retries-left (+ <retries> -1))
+   (<s> ^needs-refresh true)
+}
+
+###############################################################################
+# If no action is currently applicable, allow a bounded number of additional
+# refreshes. Once the budget is exhausted, keep refreshing until max iterations.
+# This lets temporarily disabled blinds become available again before failure.
+###############################################################################
+
+sp {light-processing*propose*wait-for-quiescence
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^percepts <p>
+              ^percepts-ready true
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^no-progress-retries-left <retries>
+              -^pending-device <pd>
+              -^needs-refresh true)
+   { (<p> ^z1d { <z1d> <> <goal-z1> })
+     (<p> ^z2d { <z2d> <> <goal-z2> }) }
+   -{ (<s> ^operator <action>)
+      (<action> ^name perform-kg-action) }
+-->
+   (print-action |[light-processing] PROPOSE wait-for-quiescence: no applicable action, remaining=| <retries>)
+   (<o> ^name wait-for-quiescence
+        ^remaining <retries>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*prefer*action-over-wait-for-quiescence
+   (state <s> ^superstate nil
+              ^operator <action> +
+              ^operator <wait> +)
+   (<action> ^name perform-kg-action)
+   (<wait> ^name wait-for-quiescence)
+-->
+   (print-action |[light-processing] PREFERENCE: perform-kg-action over wait-for-quiescence|)
+   (<s> ^operator <action> > <wait>)
+}
+
+sp {light-processing*apply*wait-for-quiescence-with-budget
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^no-progress-retries-left { <retries> > 0 })
+   (<o> ^name wait-for-quiescence
+        ^remaining <retries>)
+-->
+   (print-action |[light-processing] APPLY wait-for-quiescence: remaining=| <retries> |; waiting for no-progress snapshot to resolve|)
+   (wait 200)
+   (<s> ^no-progress-retries-left <retries> -)
+   (<s> ^no-progress-retries-left (+ <retries> -1))
+   (<s> ^needs-refresh true)
+}
+
+sp {light-processing*apply*wait-for-quiescence-exhausted
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^no-progress-retries-left 0)
+   (<o> ^name wait-for-quiescence
+        ^remaining 0)
+-->
+   (print-action |[light-processing] APPLY wait-for-quiescence: remaining=0; continuing until max iterations|)
+   (wait 200)
+   (<s> ^needs-refresh true)
+}
+
+###############################################################################
+# If a device becomes disabled while an action is pending, clear the pending
+# action and keep retrying through normal planning/refresh cycles.
+###############################################################################
+
+sp {light-processing*propose*clear-pending-disabled-l1
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^pending-device L1
+              ^percepts <p>
+              ^percepts-ready true
+              -^needs-refresh true)
+   (<p> ^l1-status false)
+-->
+   (print-action |[light-processing] PROPOSE clear-pending-disabled: device=L1|)
+   (<o> ^name clear-pending-disabled
+        ^device L1)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*propose*clear-pending-disabled-l2
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^pending-device L2
+              ^percepts <p>
+              ^percepts-ready true
+              -^needs-refresh true)
+   (<p> ^l2-status false)
+-->
+   (print-action |[light-processing] PROPOSE clear-pending-disabled: device=L2|)
+   (<o> ^name clear-pending-disabled
+        ^device L2)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*propose*clear-pending-disabled-b1
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^pending-device B1
+              ^percepts <p>
+              ^percepts-ready true
+              -^needs-refresh true)
+   (<p> ^b1-status false)
+-->
+   (print-action |[light-processing] PROPOSE clear-pending-disabled: device=B1|)
+   (<o> ^name clear-pending-disabled
+        ^device B1)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*propose*clear-pending-disabled-b2
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^pending-device B2
+              ^percepts <p>
+              ^percepts-ready true
+              -^needs-refresh true)
+   (<p> ^b2-status false)
+-->
+   (print-action |[light-processing] PROPOSE clear-pending-disabled: device=B2|)
+   (<o> ^name clear-pending-disabled
+        ^device B2)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*prefer*clear-pending-disabled
+   (state <s> ^superstate nil
+              ^operator <o> +)
+   (<o> ^name clear-pending-disabled)
+-->
+   (print-action |[light-processing] PREFERENCE: clear-pending-disabled is best|)
+   (<s> ^operator <o> >)
+}
+
+sp {light-processing*apply*clear-pending-disabled
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^pending-device <device>
+              ^pending-activate <activate>
+              ^pending-post-attribute <post-attribute>
+              ^pending-post-value <post-value>
+              ^no-progress-retries-max <no-progress-max>)
+   (<o> ^name clear-pending-disabled
+        ^device <device>)
+-->
+   (print-action |[light-processing] APPLY clear-pending-disabled: device=| <device> | disabled; clearing pending action and retrying later|)
+   (<s> ^pending-device <device> -
+        ^pending-activate <activate> -
+        ^pending-post-attribute <post-attribute> -
+        ^pending-post-value <post-value> -
+        ^no-progress-retries-left <no-progress-max>
         ^needs-refresh true)
 }
 
@@ -1330,6 +1951,757 @@ sp {light-processing*apply*wait-for-feedback
 }
 
 ###############################################################################
+# Explicit on/off configuration search
+#
+# Strategy:
+# - Heuristic actions are tried first when directly applicable.
+# - If no heuristic action can make progress, try concrete assignments for
+#   L1/L2/B1/B2.
+# - If the current config requires a disabled or otherwise blocked device,
+#   abandon the whole config with one operator: abandon-current-config.
+# - If all configurations have been tried, reset the tried marks and start over.
+#   This lets the agent recover if the environment changes, e.g., blinds become
+#   available again.
+# - The only final failure condition is the global max-iteration rule.
+###############################################################################
+
+sp {light-processing*propose*select-config
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^config-search-loaded true
+              ^config <cfg>
+              ^next-config-rank <rank>
+              ^percepts-ready true
+              ^iteration { <iteration> < <max> }
+              ^max-iterations <max>
+              -^current-config <current>
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^config-id <id>
+          ^rank <rank>
+          -^tried true)
+-->
+   (print-action |[light-processing] PROPOSE select-config: id=| <id> | rank=| <rank>)
+   (<o> ^name select-config
+        ^config <cfg>
+        ^config-id <id>
+        ^rank <rank>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*prefer*heuristic-action-over-select-config-increase
+   (state <s> ^superstate nil
+              ^operator <action> +
+              ^operator <cfg> +)
+   (<action> ^name perform-kg-action
+             ^effect increase)
+   (<cfg> ^name select-config)
+-->
+   (print-action |[light-processing] PREFERENCE: heuristic increase action over select-config|)
+   (<s> ^operator <action> > <cfg>)
+}
+
+sp {light-processing*prefer*heuristic-action-over-select-config-decrease
+   (state <s> ^superstate nil
+              ^operator <action> +
+              ^operator <cfg> +)
+   (<action> ^name perform-kg-action
+             ^effect decrease)
+   (<cfg> ^name select-config)
+-->
+   (print-action |[light-processing] PREFERENCE: heuristic decrease action over select-config|)
+   (<s> ^operator <action> > <cfg>)
+}
+
+sp {light-processing*prefer*select-config-over-quiescence
+   (state <s> ^superstate nil
+              ^operator <cfg> +
+              ^operator <wait> +)
+   (<cfg> ^name select-config)
+   (<wait> ^name wait-for-quiescence)
+-->
+   (print-action |[light-processing] PREFERENCE: select-config over wait-for-quiescence|)
+   (<s> ^operator <cfg> > <wait>)
+}
+
+sp {light-processing*apply*select-config
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^settle-retries-left <retries>)
+   (<o> ^name select-config
+        ^config <cfg>
+        ^config-id <id>)
+-->
+   (print-action |[light-processing] APPLY select-config: id=| <id>)
+   (<s> ^current-config <cfg>
+        ^settle-retries-left <retries> -)
+}
+
+sp {light-processing*apply*select-config-no-settle
+   (state <s> ^superstate nil
+              ^operator <o>
+              -^settle-retries-left <retries>)
+   (<o> ^name select-config
+        ^config <cfg>
+        ^config-id <id>)
+-->
+   (print-action |[light-processing] APPLY select-config: id=| <id>)
+   (<s> ^current-config <cfg>)
+}
+
+###############################################################################
+# Config-search actions: perform the first executable mismatch in a fixed order.
+###############################################################################
+
+sp {light-processing*propose*config-action-l1
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^current-config <cfg>
+              ^percepts <p>
+              ^action <a>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^l1 <desired>)
+   (<p> ^z1light { <current> <> <desired> }
+        ^l1-status true)
+   (<a> ^available true
+        ^device L1
+        ^activate <desired>
+        ^pre-local <pre-attribute>
+        ^pre-value <pre-value>
+        ^post-local <post-attribute>
+        ^post-value <post-value>
+        ^name <action-name>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^control-local <control>)
+   (<p> ^<pre-attribute> <pre-value>)
+-->
+   (print-action |[light-processing] PROPOSE config action: L1 -> | <desired> | via | <action-name>)
+   (<o> ^name perform-kg-action
+        ^source config-search
+        ^action-name <action-name>
+        ^zone Z1
+        ^effect set
+        ^control <control>
+        ^device L1
+        ^activate <desired>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^post-attribute <post-attribute>
+        ^post-value <post-value>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*propose*config-action-l2
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^current-config <cfg>
+              ^percepts <p>
+              ^action <a>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^l2 <desired>)
+   (<p> ^z2light { <current> <> <desired> }
+        ^l2-status true)
+   (<a> ^available true
+        ^device L2
+        ^activate <desired>
+        ^pre-local <pre-attribute>
+        ^pre-value <pre-value>
+        ^post-local <post-attribute>
+        ^post-value <post-value>
+        ^name <action-name>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^control-local <control>)
+   (<p> ^<pre-attribute> <pre-value>)
+-->
+   (print-action |[light-processing] PROPOSE config action: L2 -> | <desired> | via | <action-name>)
+   (<o> ^name perform-kg-action
+        ^source config-search
+        ^action-name <action-name>
+        ^zone Z2
+        ^effect set
+        ^control <control>
+        ^device L2
+        ^activate <desired>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^post-attribute <post-attribute>
+        ^post-value <post-value>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*propose*config-action-b1
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^current-config <cfg>
+              ^percepts <p>
+              ^action <a>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^b1 <desired>)
+   (<p> ^z1blinds { <current> <> <desired> }
+        ^b1-status true)
+   (<a> ^available true
+        ^device B1
+        ^activate <desired>
+        ^pre-local <pre-attribute>
+        ^pre-value <pre-value>
+        ^post-local <post-attribute>
+        ^post-value <post-value>
+        ^name <action-name>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^control-local <control>)
+   (<p> ^<pre-attribute> <pre-value>)
+-->
+   (print-action |[light-processing] PROPOSE config action: B1 -> | <desired> | via | <action-name>)
+   (<o> ^name perform-kg-action
+        ^source config-search
+        ^action-name <action-name>
+        ^zone Z1
+        ^effect set
+        ^control <control>
+        ^device B1
+        ^activate <desired>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^post-attribute <post-attribute>
+        ^post-value <post-value>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*propose*config-action-b2
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^current-config <cfg>
+              ^percepts <p>
+              ^action <a>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^b2 <desired>)
+   (<p> ^z2blinds { <current> <> <desired> }
+        ^b2-status true)
+   (<a> ^available true
+        ^device B2
+        ^activate <desired>
+        ^pre-local <pre-attribute>
+        ^pre-value <pre-value>
+        ^post-local <post-attribute>
+        ^post-value <post-value>
+        ^name <action-name>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^control-local <control>)
+   (<p> ^<pre-attribute> <pre-value>)
+-->
+   (print-action |[light-processing] PROPOSE config action: B2 -> | <desired> | via | <action-name>)
+   (<o> ^name perform-kg-action
+        ^source config-search
+        ^action-name <action-name>
+        ^zone Z2
+        ^effect set
+        ^control <control>
+        ^device B2
+        ^activate <desired>
+        ^method <method>
+        ^url <url>
+        ^body <body>
+        ^post-attribute <post-attribute>
+        ^post-value <post-value>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*prefer*config-action-l1-over-l2
+   (state <s> ^superstate nil
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<o1> ^name perform-kg-action ^source config-search ^device L1)
+   (<o2> ^name perform-kg-action ^source config-search ^device L2)
+-->
+   (print-action |[light-processing] PREFERENCE: config action L1 over L2|)
+   (<s> ^operator <o1> > <o2>)
+}
+
+sp {light-processing*prefer*config-action-l2-over-b1
+   (state <s> ^superstate nil
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<o1> ^name perform-kg-action ^source config-search ^device L2)
+   (<o2> ^name perform-kg-action ^source config-search ^device B1)
+-->
+   (print-action |[light-processing] PREFERENCE: config action L2 over B1|)
+   (<s> ^operator <o1> > <o2>)
+}
+
+sp {light-processing*prefer*config-action-b1-over-b2
+   (state <s> ^superstate nil
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<o1> ^name perform-kg-action ^source config-search ^device B1)
+   (<o2> ^name perform-kg-action ^source config-search ^device B2)
+-->
+   (print-action |[light-processing] PREFERENCE: config action B1 over B2|)
+   (<s> ^operator <o1> > <o2>)
+}
+
+sp {light-processing*prefer*config-action-l1-over-b1
+   (state <s> ^superstate nil
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<o1> ^name perform-kg-action ^source config-search ^device L1)
+   (<o2> ^name perform-kg-action ^source config-search ^device B1)
+-->
+   (print-action |[light-processing] PREFERENCE: config action L1 over B1|)
+   (<s> ^operator <o1> > <o2>)
+}
+
+sp {light-processing*prefer*config-action-l1-over-b2
+   (state <s> ^superstate nil
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<o1> ^name perform-kg-action ^source config-search ^device L1)
+   (<o2> ^name perform-kg-action ^source config-search ^device B2)
+-->
+   (print-action |[light-processing] PREFERENCE: config action L1 over B2|)
+   (<s> ^operator <o1> > <o2>)
+}
+
+sp {light-processing*prefer*config-action-l2-over-b2
+   (state <s> ^superstate nil
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<o1> ^name perform-kg-action ^source config-search ^device L2)
+   (<o2> ^name perform-kg-action ^source config-search ^device B2)
+-->
+   (print-action |[light-processing] PREFERENCE: config action L2 over B2|)
+   (<s> ^operator <o1> > <o2>)
+}
+
+###############################################################################
+# Config completion and config abandonment.
+###############################################################################
+
+sp {light-processing*propose*config-complete
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^current-config <cfg>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^config-id <id>
+          ^rank <rank>
+          ^l1 <l1>
+          ^l2 <l2>
+          ^b1 <b1>
+          ^b2 <b2>)
+   (<p> ^z1light <l1>
+        ^z2light <l2>
+        ^z1blinds <b1>
+        ^z2blinds <b2>)
+-->
+   (print-action |[light-processing] PROPOSE config-complete: id=| <id>)
+   (<o> ^name config-complete
+        ^config <cfg>
+        ^config-id <id>
+        ^rank <rank>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*prefer*complete-goal-over-config-complete
+   (state <s> ^superstate nil
+              ^operator <complete> +
+              ^operator <cfg> +)
+   (<complete> ^name complete-goal)
+   (<cfg> ^name config-complete)
+-->
+   (print-action |[light-processing] PREFERENCE: complete-goal over config-complete|)
+   (<s> ^operator <complete> > <cfg>)
+}
+
+sp {light-processing*prefer*config-complete-over-wait-for-quiescence
+   (state <s> ^superstate nil
+              ^operator <cfg> +
+              ^operator <wait> +)
+   (<cfg> ^name config-complete)
+   (<wait> ^name wait-for-quiescence)
+-->
+   (print-action |[light-processing] PREFERENCE: config-complete over wait-for-quiescence|)
+   (<s> ^operator <cfg> > <wait>)
+}
+
+sp {light-processing*apply*config-complete
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^next-config-rank <rank>)
+   (<o> ^name config-complete
+        ^config <cfg>
+        ^config-id <id>
+        ^rank <rank>)
+-->
+   (print-action |[light-processing] APPLY config-complete: tried id=| <id> |; refreshing before next config|)
+   (<cfg> ^tried true)
+   (<s> ^current-config <cfg> -
+        ^next-config-rank <rank> -
+        ^next-config-rank (+ <rank> 1)
+        ^needs-refresh true)
+}
+
+# Disabled mismatch: abandon the whole current config immediately.
+sp {light-processing*propose*abandon-current-config-l1-disabled
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^current-config <cfg>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^config-id <id>
+          ^rank <rank>
+          ^l1 <desired>)
+   (<p> ^z1light { <current> <> <desired> }
+        ^l1-status false)
+-->
+   (print-action |[light-processing] PROPOSE abandon-current-config: id=| <id> | reason=L1-disabled|)
+   (<o> ^name abandon-current-config
+        ^reason disabled
+        ^device L1
+        ^config <cfg>
+        ^config-id <id>
+        ^rank <rank>)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*propose*abandon-current-config-l2-disabled
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^current-config <cfg>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^config-id <id>
+          ^rank <rank>
+          ^l2 <desired>)
+   (<p> ^z2light { <current> <> <desired> }
+        ^l2-status false)
+-->
+   (print-action |[light-processing] PROPOSE abandon-current-config: id=| <id> | reason=L2-disabled|)
+   (<o> ^name abandon-current-config
+        ^reason disabled
+        ^device L2
+        ^config <cfg>
+        ^config-id <id>
+        ^rank <rank>)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*propose*abandon-current-config-b1-disabled
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^current-config <cfg>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^config-id <id>
+          ^rank <rank>
+          ^b1 <desired>)
+   (<p> ^z1blinds { <current> <> <desired> }
+        ^b1-status false)
+-->
+   (print-action |[light-processing] PROPOSE abandon-current-config: id=| <id> | reason=B1-disabled|)
+   (<o> ^name abandon-current-config
+        ^reason disabled
+        ^device B1
+        ^config <cfg>
+        ^config-id <id>
+        ^rank <rank>)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*propose*abandon-current-config-b2-disabled
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^current-config <cfg>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^config-id <id>
+          ^rank <rank>
+          ^b2 <desired>)
+   (<p> ^z2blinds { <current> <> <desired> }
+        ^b2-status false)
+-->
+   (print-action |[light-processing] PROPOSE abandon-current-config: id=| <id> | reason=B2-disabled|)
+   (<o> ^name abandon-current-config
+        ^reason disabled
+        ^device B2
+        ^config <cfg>
+        ^config-id <id>
+        ^rank <rank>)
+   (<s> ^operator <o> + =)
+}
+
+# Blocked mismatch: if no config-search action is executable at all, abandon the
+# whole config and move on. The + = indifferent preference prevents a tie impasse
+# if several mismatches are blocked at the same time.
+sp {light-processing*propose*abandon-current-config-l1-blocked
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^current-config <cfg>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^config-id <id>
+          ^rank <rank>
+          ^l1 <desired>)
+   (<p> ^z1light { <current> <> <desired> })
+   -{ (<s> ^operator <action>)
+      (<action> ^name perform-kg-action
+                ^source config-search) }
+-->
+   (print-action |[light-processing] PROPOSE abandon-current-config: id=| <id> | reason=L1-blocked|)
+   (<o> ^name abandon-current-config
+        ^reason blocked
+        ^device L1
+        ^config <cfg>
+        ^config-id <id>
+        ^rank <rank>)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*propose*abandon-current-config-l2-blocked
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^current-config <cfg>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^config-id <id>
+          ^rank <rank>
+          ^l2 <desired>)
+   (<p> ^z2light { <current> <> <desired> })
+   -{ (<s> ^operator <action>)
+      (<action> ^name perform-kg-action
+                ^source config-search) }
+-->
+   (print-action |[light-processing] PROPOSE abandon-current-config: id=| <id> | reason=L2-blocked|)
+   (<o> ^name abandon-current-config
+        ^reason blocked
+        ^device L2
+        ^config <cfg>
+        ^config-id <id>
+        ^rank <rank>)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*propose*abandon-current-config-b1-blocked
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^current-config <cfg>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^config-id <id>
+          ^rank <rank>
+          ^b1 <desired>)
+   (<p> ^z1blinds { <current> <> <desired> })
+   -{ (<s> ^operator <action>)
+      (<action> ^name perform-kg-action
+                ^source config-search) }
+-->
+   (print-action |[light-processing] PROPOSE abandon-current-config: id=| <id> | reason=B1-blocked|)
+   (<o> ^name abandon-current-config
+        ^reason blocked
+        ^device B1
+        ^config <cfg>
+        ^config-id <id>
+        ^rank <rank>)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*propose*abandon-current-config-b2-blocked
+   (state <s> ^superstate nil
+              ^active-goal <ag>
+              ^current-config <cfg>
+              ^percepts <p>
+              ^percepts-ready true
+              -^pending-device <pd>
+              -^needs-refresh true)
+   (<cfg> ^config-id <id>
+          ^rank <rank>
+          ^b2 <desired>)
+   (<p> ^z2blinds { <current> <> <desired> })
+   -{ (<s> ^operator <action>)
+      (<action> ^name perform-kg-action
+                ^source config-search) }
+-->
+   (print-action |[light-processing] PROPOSE abandon-current-config: id=| <id> | reason=B2-blocked|)
+   (<o> ^name abandon-current-config
+        ^reason blocked
+        ^device B2
+        ^config <cfg>
+        ^config-id <id>
+        ^rank <rank>)
+   (<s> ^operator <o> + =)
+}
+
+sp {light-processing*prefer*disabled-abandon-current-config-over-blocked
+   (state <s> ^superstate nil
+              ^operator <disabled> +
+              ^operator <blocked> +)
+   (<disabled> ^name abandon-current-config
+               ^reason disabled)
+   (<blocked> ^name abandon-current-config
+              ^reason blocked)
+-->
+   (print-action |[light-processing] PREFERENCE: disabled abandon-current-config over blocked abandon-current-config|)
+   (<s> ^operator <disabled> > <blocked>)
+}
+
+sp {light-processing*prefer*abandon-current-config-over-config-action-when-disabled
+   (state <s> ^superstate nil
+              ^operator <abandon> +
+              ^operator <action> +)
+   (<abandon> ^name abandon-current-config
+              ^reason disabled)
+   (<action> ^name perform-kg-action
+             ^source config-search)
+-->
+   (print-action |[light-processing] PREFERENCE: disabled abandon-current-config over config action|)
+   (<s> ^operator <abandon> > <action>)
+}
+
+sp {light-processing*prefer*config-action-over-blocked-abandon-current-config
+   (state <s> ^superstate nil
+              ^operator <action> +
+              ^operator <abandon> +)
+   (<action> ^name perform-kg-action
+             ^source config-search)
+   (<abandon> ^name abandon-current-config
+              ^reason blocked)
+-->
+   (print-action |[light-processing] PREFERENCE: config action over blocked abandon-current-config|)
+   (<s> ^operator <action> > <abandon>)
+}
+
+sp {light-processing*prefer*abandon-current-config-over-wait-for-quiescence
+   (state <s> ^superstate nil
+              ^operator <abandon> +
+              ^operator <wait> +)
+   (<abandon> ^name abandon-current-config)
+   (<wait> ^name wait-for-quiescence)
+-->
+   (print-action |[light-processing] PREFERENCE: abandon-current-config over wait-for-quiescence|)
+   (<s> ^operator <abandon> > <wait>)
+}
+
+sp {light-processing*prefer*fail-goal-over-abandon-current-config
+   (state <s> ^superstate nil
+              ^operator <fail> +
+              ^operator <abandon> +)
+   (<fail> ^name fail-goal)
+   (<abandon> ^name abandon-current-config)
+-->
+   (print-action |[light-processing] PREFERENCE: fail-goal over abandon-current-config|)
+   (<s> ^operator <fail> > <abandon>)
+}
+
+sp {light-processing*apply*abandon-current-config
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^next-config-rank <rank>)
+   (<o> ^name abandon-current-config
+        ^config <cfg>
+        ^config-id <id>
+        ^rank <rank>
+        ^reason <reason>
+        ^device <device>)
+-->
+   (print-action |[light-processing] APPLY abandon-current-config: id=| <id> | device=| <device> | reason=| <reason> |; try next config|)
+   (<cfg> ^tried true)
+   (<s> ^current-config <cfg> -
+        ^next-config-rank <rank> -
+        ^next-config-rank (+ <rank> 1)
+        ^needs-refresh true)
+}
+
+###############################################################################
+# Config-search reset after all combinations have been tried.
+###############################################################################
+
+sp {light-processing*propose*reset-config-search-all-configs-tried
+   (state <s> ^superstate nil
+              ^started true
+              ^active-goal <ag>
+              ^config-search-loaded true
+              ^next-config-rank { <rank> > 15 }
+              ^percepts-ready true
+              ^iteration { <iteration> < <max> }
+              ^max-iterations <max>
+              -^current-config <cfg>
+              -^pending-device <pd>
+              -^needs-refresh true)
+-->
+   (print-action |[light-processing] PROPOSE reset-config-search: all configurations tried; continuing until max iterations|)
+   (<o> ^name reset-config-search
+        ^rank <rank>)
+   (<s> ^operator <o> +)
+}
+
+sp {light-processing*prefer*reset-config-search-over-quiescence
+   (state <s> ^superstate nil
+              ^operator <reset> +
+              ^operator <wait> +)
+   (<reset> ^name reset-config-search)
+   (<wait> ^name wait-for-quiescence)
+-->
+   (print-action |[light-processing] PREFERENCE: reset-config-search over wait-for-quiescence|)
+   (<s> ^operator <reset> > <wait>)
+}
+
+sp {light-processing*apply*reset-config-search
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^next-config-rank <rank>)
+   (<o> ^name reset-config-search)
+-->
+   (print-action |[light-processing] APPLY reset-config-search: clearing tried config marks and restarting config ranks|)
+   (<s> ^next-config-rank <rank> -
+        ^next-config-rank 0
+        ^needs-refresh true)
+}
+
+sp {light-processing*cleanup-tried-config-during-reset
+   (state <s> ^superstate nil
+              ^operator <o>
+              ^config <cfg>)
+   (<o> ^name reset-config-search)
+   (<cfg> ^tried true)
+-->
+   (<cfg> ^tried true -)
+}
+
+###############################################################################
 # Candidate operators for the problem space
 ###############################################################################
 
@@ -1341,6 +2713,7 @@ sp {light-processing*propose*z1*increase
               ^action <a>
               ^percepts-ready true
               -^pending-device <pd>
+              -^current-config <cfg>
               -^needs-refresh true)
    (<p> ^z1d { <z1d> < <goal-z1> })
    (<a> ^available true
@@ -1356,8 +2729,10 @@ sp {light-processing*propose*z1*increase
         ^method <method>
         ^url <url>
         ^body <body>
-        ^control-local <control>)
-   (<p> ^<pre-attribute> <pre-value>)
+        ^control-local <control>
+        ^status-local <status-attribute>)
+   (<p> ^<pre-attribute> <pre-value>
+        ^<status-attribute> true)
 -->
    (print-action |[light-processing] PROPOSE Z1 increase: z1d=| <z1d> | goal=| <goal-z1> | action=| <action-name> | control=| <control>)
    (<o> ^name perform-kg-action
@@ -1383,6 +2758,7 @@ sp {light-processing*propose*z1*decrease
               ^action <a>
               ^percepts-ready true
               -^pending-device <pd>
+              -^current-config <cfg>
               -^needs-refresh true)
    (<p> ^z1d { <z1d> > <goal-z1> })
    (<a> ^available true
@@ -1398,8 +2774,10 @@ sp {light-processing*propose*z1*decrease
         ^method <method>
         ^url <url>
         ^body <body>
-        ^control-local <control>)
-   (<p> ^<pre-attribute> <pre-value>)
+        ^control-local <control>
+        ^status-local <status-attribute>)
+   (<p> ^<pre-attribute> <pre-value>
+        ^<status-attribute> true)
 -->
    (print-action |[light-processing] PROPOSE Z1 decrease: z1d=| <z1d> | goal=| <goal-z1> | action=| <action-name> | control=| <control>)
    (<o> ^name perform-kg-action
@@ -1425,6 +2803,7 @@ sp {light-processing*propose*z2*increase
               ^action <a>
               ^percepts-ready true
               -^pending-device <pd>
+              -^current-config <cfg>
               -^needs-refresh true)
    (<p> ^z2d { <z2d> < <goal-z2> })
    (<a> ^available true
@@ -1440,8 +2819,10 @@ sp {light-processing*propose*z2*increase
         ^method <method>
         ^url <url>
         ^body <body>
-        ^control-local <control>)
-   (<p> ^<pre-attribute> <pre-value>)
+        ^control-local <control>
+        ^status-local <status-attribute>)
+   (<p> ^<pre-attribute> <pre-value>
+        ^<status-attribute> true)
 -->
    (print-action |[light-processing] PROPOSE Z2 increase: z2d=| <z2d> | goal=| <goal-z2> | action=| <action-name> | control=| <control>)
    (<o> ^name perform-kg-action
@@ -1467,6 +2848,7 @@ sp {light-processing*propose*z2*decrease
               ^action <a>
               ^percepts-ready true
               -^pending-device <pd>
+              -^current-config <cfg>
               -^needs-refresh true)
    (<p> ^z2d { <z2d> > <goal-z2> })
    (<a> ^available true
@@ -1482,8 +2864,10 @@ sp {light-processing*propose*z2*decrease
         ^method <method>
         ^url <url>
         ^body <body>
-        ^control-local <control>)
-   (<p> ^<pre-attribute> <pre-value>)
+        ^control-local <control>
+        ^status-local <status-attribute>)
+   (<p> ^<pre-attribute> <pre-value>
+        ^<status-attribute> true)
 -->
    (print-action |[light-processing] PROPOSE Z2 decrease: z2d=| <z2d> | goal=| <goal-z2> | action=| <action-name> | control=| <control>)
    (<o> ^name perform-kg-action
@@ -1505,22 +2889,103 @@ sp {light-processing*propose*z2*decrease
 # Top-state action selection preferences
 ###############################################################################
 
-sp {light-processing*prefer*increase*blinds-over-light
+sp {light-processing*prefer*z1-blinds-over-light-when-both-need-increase
    (state <s> ^superstate nil
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^percepts <p>
+              ^percepts-ready true
               ^operator <o1> +
               ^operator <o2> +)
+   (<p> ^z1d { <z1d> < <goal-z1> }
+        ^z2d { <z2d> < <goal-z2> })
    (<o1> ^name perform-kg-action
          ^effect increase
-         ^zone <zone>
+         ^zone Z1
          ^control blinds
          ^action-name <n1>)
    (<o2> ^name perform-kg-action
          ^effect increase
-         ^zone <zone>
+         ^zone Z1
          ^control light
          ^action-name <n2>)
 -->
-   (print-action |[light-processing] PREFERENCE: increase in same zone, prefer blinds over light; prefer | <n1> | over | <n2>)
+   (print-action |[light-processing] PREFERENCE: both zones need increase, prefer Z1 blinds over light; prefer | <n1> | over | <n2>)
+   (<s> ^operator <o1> > <o2>)
+}
+
+sp {light-processing*prefer*z2-blinds-over-light-when-both-need-increase
+   (state <s> ^superstate nil
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^percepts <p>
+              ^percepts-ready true
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<p> ^z1d { <z1d> < <goal-z1> }
+        ^z2d { <z2d> < <goal-z2> })
+   (<o1> ^name perform-kg-action
+         ^effect increase
+         ^zone Z2
+         ^control blinds
+         ^action-name <n1>)
+   (<o2> ^name perform-kg-action
+         ^effect increase
+         ^zone Z2
+         ^control light
+         ^action-name <n2>)
+-->
+   (print-action |[light-processing] PREFERENCE: both zones need increase, prefer Z2 blinds over light; prefer | <n1> | over | <n2>)
+   (<s> ^operator <o1> > <o2>)
+}
+
+sp {light-processing*prefer*z1-blinds-over-light-when-z2-not-high
+   (state <s> ^superstate nil
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^percepts <p>
+              ^percepts-ready true
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<p> ^z1d { <z1d> < <goal-z1> }
+        ^z2d { <z2d> <= <goal-z2> })
+   (<o1> ^name perform-kg-action
+         ^effect increase
+         ^zone Z1
+         ^control blinds
+         ^action-name <n1>)
+   (<o2> ^name perform-kg-action
+         ^effect increase
+         ^zone Z1
+         ^control light
+         ^action-name <n2>)
+-->
+   (print-action |[light-processing] PREFERENCE: Z2 not high, prefer Z1 blinds over light; prefer | <n1> | over | <n2>)
+   (<s> ^operator <o1> > <o2>)
+}
+
+sp {light-processing*prefer*z2-blinds-over-light-when-z1-not-high
+   (state <s> ^superstate nil
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^percepts <p>
+              ^percepts-ready true
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<p> ^z2d { <z2d> < <goal-z2> }
+        ^z1d { <z1d> <= <goal-z1> })
+   (<o1> ^name perform-kg-action
+         ^effect increase
+         ^zone Z2
+         ^control blinds
+         ^action-name <n1>)
+   (<o2> ^name perform-kg-action
+         ^effect increase
+         ^zone Z2
+         ^control light
+         ^action-name <n2>)
+-->
+   (print-action |[light-processing] PREFERENCE: Z1 not high, prefer Z2 blinds over light; prefer | <n1> | over | <n2>)
    (<s> ^operator <o1> > <o2>)
 }
 
@@ -1543,10 +3008,116 @@ sp {light-processing*prefer*decrease*light-over-blinds
    (<s> ^operator <o1> > <o2>)
 }
 
-sp {light-processing*prefer*z1-over-z2
+# In mixed states, prefer improving the too-low zone before repairing the
+# too-high zone. This avoids oscillating on a coupled actuator like B1.
+sp {light-processing*prefer*z2-increase-over-z1-decrease
    (state <s> ^superstate nil
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^percepts <p>
+              ^percepts-ready true
               ^operator <o1> +
               ^operator <o2> +)
+   (<p> ^z1d { <z1d> > <goal-z1> }
+        ^z2d { <z2d> < <goal-z2> })
+   (<o1> ^name perform-kg-action
+         ^zone Z1
+         ^effect decrease
+         ^action-name <n1>)
+   (<o2> ^name perform-kg-action
+         ^zone Z2
+         ^effect increase
+         ^action-name <n2>)
+-->
+   (print-action |[light-processing] PREFERENCE: mixed state, prefer Z2 increase over Z1 decrease; prefer | <n2> | over | <n1>)
+   (<s> ^operator <o2> > <o1>)
+}
+
+sp {light-processing*prefer*z1-increase-over-z2-decrease
+   (state <s> ^superstate nil
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^percepts <p>
+              ^percepts-ready true
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<p> ^z1d { <z1d> < <goal-z1> }
+        ^z2d { <z2d> > <goal-z2> })
+   (<o1> ^name perform-kg-action
+         ^zone Z1
+         ^effect increase
+         ^action-name <n1>)
+   (<o2> ^name perform-kg-action
+         ^zone Z2
+         ^effect decrease
+         ^action-name <n2>)
+-->
+   (print-action |[light-processing] PREFERENCE: mixed state, prefer Z1 increase over Z2 decrease; prefer | <n1> | over | <n2>)
+   (<s> ^operator <o1> > <o2>)
+}
+
+# When one zone is already above goal and the other still needs more light,
+# prefer the artificial light action in the low zone over opening more blinds.
+sp {light-processing*prefer*z2-light-over-z2-blinds-when-z1-high
+   (state <s> ^superstate nil
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^percepts <p>
+              ^percepts-ready true
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<p> ^z1d { <z1d> > <goal-z1> }
+        ^z2d { <z2d> < <goal-z2> })
+   (<o1> ^name perform-kg-action
+         ^zone Z2
+         ^effect increase
+         ^control light
+         ^action-name <n1>)
+   (<o2> ^name perform-kg-action
+         ^zone Z2
+         ^effect increase
+         ^control blinds
+         ^action-name <n2>)
+-->
+   (print-action |[light-processing] PREFERENCE: Z1 already high, prefer Z2 light over blinds; prefer | <n1> | over | <n2>)
+   (<s> ^operator <o1> > <o2>)
+}
+
+sp {light-processing*prefer*z1-light-over-z1-blinds-when-z2-high
+   (state <s> ^superstate nil
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^percepts <p>
+              ^percepts-ready true
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<p> ^z1d { <z1d> < <goal-z1> }
+        ^z2d { <z2d> > <goal-z2> })
+   (<o1> ^name perform-kg-action
+         ^zone Z1
+         ^effect increase
+         ^control light
+         ^action-name <n1>)
+   (<o2> ^name perform-kg-action
+         ^zone Z1
+         ^effect increase
+         ^control blinds
+         ^action-name <n2>)
+-->
+   (print-action |[light-processing] PREFERENCE: Z2 already high, prefer Z1 light over blinds; prefer | <n1> | over | <n2>)
+   (<s> ^operator <o1> > <o2>)
+}
+
+sp {light-processing*prefer*z1-over-z2-when-both-need-increase
+   (state <s> ^superstate nil
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^percepts <p>
+              ^percepts-ready true
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<p> ^z1d { <z1d> < <goal-z1> }
+        ^z2d { <z2d> < <goal-z2> })
    (<o1> ^name perform-kg-action
          ^zone Z1
          ^action-name <n1>)
@@ -1554,7 +3125,28 @@ sp {light-processing*prefer*z1-over-z2
          ^zone Z2
          ^action-name <n2>)
 -->
-   (print-action |[light-processing] PREFERENCE: default prefer Z1 over Z2; prefer | <n1> | over | <n2>)
+   (print-action |[light-processing] PREFERENCE: both zones need increase, prefer Z1 over Z2; prefer | <n1> | over | <n2>)
+   (<s> ^operator <o1> > <o2>)
+}
+
+sp {light-processing*prefer*z1-over-z2-when-both-need-decrease
+   (state <s> ^superstate nil
+              ^goal-z1 <goal-z1>
+              ^goal-z2 <goal-z2>
+              ^percepts <p>
+              ^percepts-ready true
+              ^operator <o1> +
+              ^operator <o2> +)
+   (<p> ^z1d { <z1d> > <goal-z1> }
+        ^z2d { <z2d> > <goal-z2> })
+   (<o1> ^name perform-kg-action
+         ^zone Z1
+         ^action-name <n1>)
+   (<o2> ^name perform-kg-action
+         ^zone Z2
+         ^action-name <n2>)
+-->
+   (print-action |[light-processing] PREFERENCE: both zones need decrease, prefer Z1 over Z2; prefer | <n1> | over | <n2>)
    (<s> ^operator <o1> > <o2>)
 }
 
@@ -1568,6 +3160,7 @@ sp {light-processing*apply*kg-action
               ^operator <o>
               ^headers <headers>
               ^iteration <iteration>
+              ^no-progress-retries-max <no-progress-max>
               ^io.output-link <ol>)
    (<o> ^name perform-kg-action
         ^action-name <action-name>
@@ -1592,6 +3185,7 @@ sp {light-processing*apply*kg-action
         ^pending-activate <activate>
         ^pending-post-attribute <post-attribute>
         ^pending-post-value <post-value>
+        ^no-progress-retries-left <no-progress-max>
         ^needs-refresh true)
 
    (<s> ^iteration <iteration> -)
@@ -1601,102 +3195,10 @@ sp {light-processing*apply*kg-action
 ###############################################################################
 # Diagnostic fallback operators
 #
-# These do not repair a bad KG model, but they prevent silent stopping.
-# If one of these fires, the KG action model and the percept attribute/value
-# vocabulary are inconsistent for the needed direction.
+# No-applicable-action is treated as a transient condition. The agent keeps
+# waiting and refreshing until a real action becomes available again or the
+# max-iterations failure rule fires.
 ###############################################################################
-
-sp {light-processing*propose*diagnose-z1-needs-increase
-   (state <s> ^superstate nil
-              ^active-goal <ag>
-              ^goal-event <event-id>
-              ^goal-z1 <goal-z1>
-              ^goal-z2 <goal-z2>
-              ^goal-url <goal-url>
-              ^percepts <p>
-              ^percepts-ready true
-              -^pending-device <pd>
-              -^needs-refresh true)
-   (<p> ^z1d { <z1d> < <goal-z1> })
--->
-   (print-action |[light-processing] PROPOSE fail-goal: Z1 needs increase, but no applicable action was proposed|)
-   (<o> ^name fail-goal
-        ^reason no-applicable-action
-        ^event-id <event-id>
-        ^goal-z1 <goal-z1>
-        ^goal-z2 <goal-z2>
-        ^goal-url <goal-url>)
-   (<s> ^operator <o> +)
-}
-
-sp {light-processing*propose*diagnose-z1-needs-decrease
-   (state <s> ^superstate nil
-              ^active-goal <ag>
-              ^goal-event <event-id>
-              ^goal-z1 <goal-z1>
-              ^goal-z2 <goal-z2>
-              ^goal-url <goal-url>
-              ^percepts <p>
-              ^percepts-ready true
-              -^pending-device <pd>
-              -^needs-refresh true)
-   (<p> ^z1d { <z1d> > <goal-z1> })
--->
-   (print-action |[light-processing] PROPOSE fail-goal: Z1 needs decrease, but no applicable action was proposed|)
-   (<o> ^name fail-goal
-        ^reason no-applicable-action
-        ^event-id <event-id>
-        ^goal-z1 <goal-z1>
-        ^goal-z2 <goal-z2>
-        ^goal-url <goal-url>)
-   (<s> ^operator <o> +)
-}
-
-sp {light-processing*propose*diagnose-z2-needs-increase
-   (state <s> ^superstate nil
-              ^active-goal <ag>
-              ^goal-event <event-id>
-              ^goal-z1 <goal-z1>
-              ^goal-z2 <goal-z2>
-              ^goal-url <goal-url>
-              ^percepts <p>
-              ^percepts-ready true
-              -^pending-device <pd>
-              -^needs-refresh true)
-   (<p> ^z2d { <z2d> < <goal-z2> })
--->
-   (print-action |[light-processing] PROPOSE fail-goal: Z2 needs increase, but no applicable action was proposed|)
-   (<o> ^name fail-goal
-        ^reason no-applicable-action
-        ^event-id <event-id>
-        ^goal-z1 <goal-z1>
-        ^goal-z2 <goal-z2>
-        ^goal-url <goal-url>)
-   (<s> ^operator <o> +)
-}
-
-sp {light-processing*propose*diagnose-z2-needs-decrease
-   (state <s> ^superstate nil
-              ^active-goal <ag>
-              ^goal-event <event-id>
-              ^goal-z1 <goal-z1>
-              ^goal-z2 <goal-z2>
-              ^goal-url <goal-url>
-              ^percepts <p>
-              ^percepts-ready true
-              -^pending-device <pd>
-              -^needs-refresh true)
-   (<p> ^z2d { <z2d> > <goal-z2> })
--->
-   (print-action |[light-processing] PROPOSE fail-goal: Z2 needs decrease, but no applicable action was proposed|)
-   (<o> ^name fail-goal
-        ^reason no-applicable-action
-        ^event-id <event-id>
-        ^goal-z1 <goal-z1>
-        ^goal-z2 <goal-z2>
-        ^goal-url <goal-url>)
-   (<s> ^operator <o> +)
-}
 
 ###############################################################################
 # Output-link cleanup
